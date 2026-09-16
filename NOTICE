@@ -1,0 +1,22 @@
+Breeze TTS 2 — Attribution and License Notice
+=============================================
+
+Breeze TTS 2 is licensed under the BreezeBlue Research and Non-Commercial
+License Agreement. Copyright (c) 2026 RESONIA, INC. All Rights Reserved.
+
+The engine source code in this repository (breeze_infer/, models/, infer.py,
+etc.) is licensed under the Apache License, Version 2.0; see LICENSE.
+
+The code under `ptbr_lora/` adds training and evaluation utilities for a
+Portuguese (pt-BR) LoRA adapter derived from Breeze TTS 2. It is distributed
+under the same terms as the engine code (Apache-2.0), and any model produced
+with it is a Derivative Model governed by the BreezeBlue Research and
+Non-Commercial License.
+
+If you distribute an adapter (or other derivative) produced with this code, you
+must include this Notice and prominently state:
+
+  "Derived from Breeze TTS 2 by BreezeBlue and licensed for research and
+   non-commercial use only."
+
+No endorsed or official affiliation with BreezeBlue is implied.

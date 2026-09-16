@@ -17,3 +17,31 @@ htmlcov/
 .env.*
 !.env.example
 
+# ---------------------------------------------------------------- PT-BR LoRA
+# Artefatos pesados / gerados (NUNCA vao para o git):
+artifacts/
+datasets/
+training/
+/models/Breeze-TTS-2/
+_ref/
+*.safetensors
+*.npz
+*.parquet
+*.tar.gz
+*.ckpt
+*.pt
+*.pth
+
+# Saidas do pipeline de scraping
+ptbr_lora/scraping/work/
+ptbr_lora/scraping/data/
+ptbr_lora/scraping/pilot_audit/
+ptbr_lora/scraping/config/yt-dlp-cookies/
+cookies.txt
+
+# Scratch
+*.log
+
+# Arquivos pessoais/locais (espelham a raiz; nao publicados)
+.local/
+
