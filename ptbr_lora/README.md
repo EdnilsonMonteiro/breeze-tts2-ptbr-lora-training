@@ -4,7 +4,7 @@ Este diretorio reune **todo o codigo escrito por nos** dentro do fork. O engine
 oficial (`breeze_infer/`, `models/`, `infer.py`) fica na raiz do repositorio e
 **nao foi alterado**; os pesos e artefatos ficam **fora** do git.
 
-> Entrada do repositorio: `../PTBR_LORA.md`.
+> Entrada do repositorio: `../README.md`.
 > Documentacao publica: `../docs/` (instalacao, configuracao, dados, treino, avaliacao).
 > Caminhos/ambiente: `core/paths.py` + `.env` (ver `../.env.example`).
 

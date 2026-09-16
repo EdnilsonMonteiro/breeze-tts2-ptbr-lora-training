@@ -1,190 +1,119 @@
-<div align="center">
-  <a href="https://breezeblue.ai/"><img src="assets/breezeblue-logo.png" alt="BreezeBlue" width="35%"></a>
-  <br><br>
-  <a href="https://huggingface.co/BreezeBlue/breeze-tts-2"><img src="https://img.shields.io/badge/Hugging%20Face-breeze--tts--2-FFD21E" alt="Hugging Face"></a>
-  <a href="https://breezeblue.ai/breeze-tts-2"><img src="https://img.shields.io/badge/Blog-Breeze%20TTS%202-2563EB" alt="Blog"></a>
-  <a href="https://breezeblue.ai/"><img src="https://img.shields.io/badge/Website-BreezeBlue-0EA5E9" alt="Website"></a>
-  <a href="https://discord.com/invite/6H7AgPe9pA"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://x.com/BreezeBlueX"><img src="https://img.shields.io/badge/X-Follow%20BreezeBlue-000000?logo=x&logoColor=white" alt="X"></a>
-</div>
+# PT-BR LoRA for Breeze TTS 2 — training (fork)
 
-> [!IMPORTANT]
-> Source code is licensed under Apache 2.0. Breeze TTS 2 model weights, derivative models, and self-hosted outputs are for research and non-commercial use only. See [License](#license-and-responsible-use).
+> **Official project (upstream):** [**breezeblue-ai/breeze-tts**](https://github.com/breezeblue-ai/breeze-tts)
+> · **Model weights:** [BreezeBlue/Breeze-TTS-2](https://huggingface.co/BreezeBlue/Breeze-TTS-2)
+> · **Model license:** [BreezeBlue Research and Non-Commercial](https://huggingface.co/BreezeBlue/Breeze-TTS-2/blob/main/LICENSE)
 
-## 📰 News
+This repository is a **fork of the official [`breezeblue-ai/breeze-tts`](https://github.com/breezeblue-ai/breeze-tts)**
+that adds the code used to train and evaluate a **Brazilian Portuguese (pt-BR)
+LoRA adapter** on top of the Breeze TTS 2 codec language model, on a single
+16 GB consumer GPU. For the original engine README, usage and full license, see
+the official repository above.
 
-- **[2026.08.25]** 🎉 We release [Breeze TTS 2](https://huggingface.co/BreezeBlue/breeze-tts-2) model weights and the [PyTorch inference code](https://github.com/breezeblue-ai/breeze-tts).
-- **[2026.08.07]** 🔥 We release the TTS benchmark suite for [voice design](https://github.com/breezeblue-ai/tts-voice-design-benchmark), [voice direction](https://github.com/breezeblue-ai/TTS-Voice-Direction-Benchmark), and [latency evaluation](https://github.com/breezeblue-ai/TTS-Latency-Benchmark).
+- **Engine** (upstream, Apache-2.0): kept as-is at the repository root.
+- **Project code** (this fork): `ptbr_lora/`.
+- **Artifacts** (base weights, datasets, training runs): kept **outside** the git
+  tree; see *Artifacts* below.
 
-## 📖 Introduction
+> Derived from Breeze TTS 2 by BreezeBlue and licensed for research and
+> non-commercial use only. See `NOTICE`; the model license is at
+> https://huggingface.co/BreezeBlue/Breeze-TTS-2/blob/main/LICENSE.
 
-Breeze TTS 2 is an open-weight text-to-speech model built for real-time interaction. It ranks #1 among open-weight models on the Artificial Analysis TTS leaderboard, while outperforming frontier proprietary systems. Its open-ended natural-language instruction-following capability supports reference-free voice design and reference-guided voice direction, while ultra-low-latency streaming enables responsive, expressive interaction.
+> **Status — o modelo adaptador ainda NÃO foi publicado.** Este repositório
+> contém apenas o **código** de treino/avaliação. O LoRA **não** está disponível
+> aqui nem no Hugging Face; ele será liberado após treinos adicionais (mais runs).
+> A publicação atual é apenas o **registro do código**.
 
-<div align="center">
-  <img src="assets/tts-elo-leaderboard.svg" alt="Text-to-speech models ranked by Artificial Analysis Elo score" width="100%">
-</div>
+> **Upstream commit:** baseado em `008f769` do
+> [`breezeblue-ai/breeze-tts`](https://github.com/breezeblue-ai/breeze-tts)
+> (ver [`UPSTREAM.md`](UPSTREAM.md) para sincronizar).
 
-## ✨ Highlights
+## Documentation
 
-- 🎙️ **Voice Clone** — Uses reference audio with its exact transcript to preserve timbre, rhythm, emotion, and style.
-- 🎨 **Voice Design** — Creates a distinctive voice from a natural-language description, without reference audio.
-- 🎛️ **Voice Direction** — Clones a voice from reference audio while steering tone, emotion, pace, and delivery.
-- 🎭 **Vocal Events** — Adds expressive inline events directly in the text: use parentheses in English, such as `(laugh)`, `(cough)`, `(clears throat)`, and `(sigh)`; use square brackets in Chinese, such as `[笑]`, `[咳嗽]`, `[清嗓子]`, and `[叹气]`.
-- ⚡ **Ultra-Low Latency** — Achieves under 40 ms time to first audio (TTFA) with the warmed-up fast path on an NVIDIA H100.
-- 🌊 **Real-Time Streaming** — Reaches a 0.32 real-time factor (RTF), generating audio at approximately 3.1× real time with the warmed-up fast path on an NVIDIA H100.
-- 💾 **GPU-Efficient** — Eager inference uses approximately 7.7 GiB of GPU memory; a 12 GB GPU is the minimum recommended configuration.
-- 🌏 **Bilingual Support** — Generates natural English and Chinese speech with a single model.
+Public, user-facing documentation lives in [`docs/`](docs/README.md):
 
-## 🚀 Quick Start
+| Doc | Content |
+|---|---|
+| [`docs/INSTALL.md`](docs/INSTALL.md) | environment, dependencies, base checkpoint |
+| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | `PTBR_ARTIFACTS` and all env vars |
+| [`docs/DATASETS.md`](docs/DATASETS.md) | corpora download, ingestion, `prepare_dataset.py` |
+| [`docs/TRAINING.md`](docs/TRAINING.md) | `train_lora.py`, `auto_train.py`, LoRA options |
+| [`docs/EVALUATION.md`](docs/EVALUATION.md) | val loss, WER/CER, speaker similarity |
 
-### Requirements
+## Layout
 
-- Linux and Python 3.10 or newer
-- A CUDA-capable NVIDIA GPU
-- GPU memory: approximately 7.7 GiB for eager inference or 14.4 GiB with `--fast-all`; use a 12 GB GPU for eager or a 24 GB GPU for the fast path
-- The Breeze TTS 2 checkpoint
-
-### Installation
-
-Download the inference code:
-
-```bash
-git clone https://github.com/breezeblue-ai/breeze-tts.git
-cd breeze-tts
+```
+ptbr_lora/
+├─ core/      paths.py, common_breeze.py, prepare_dataset.py, train_lora.py
+├─ data/      corpus download/ingestion (HF), speaker clustering (ECAPA)
+├─ scraping/  podcast pipeline (YouTube -> 24 kHz chunks + transcription)
+├─ train/     auto_train.py (chained runs)
+├─ eval/      val_full, WER/CER, speaker similarity
+└─ tools/     model/corpus diagnostics
+docs/         public documentation (this repo)
 ```
 
-Install the dependencies:
+## Install
 
 ```bash
-python -m pip install -r requirements.txt
+git clone https://github.com/EdnilsonMonteiro/breeze-tts2-ptbr-lora-training.git
+cd breeze-tts2-ptbr-lora-training
+python -m venv venv && ./venv/Scripts/activate      # Windows (Linux: source venv/bin/activate)
+pip install -r requirements.txt -r requirements-ptbr.txt
 ```
 
-All required model components are included in the Breeze TTS 2 checkpoint.
+See [`docs/INSTALL.md`](docs/INSTALL.md) for details.
 
-For the tested CUDA environment, build the included Docker image:
+## Artifacts (outside git)
+
+All paths come from `ptbr_lora/core/paths.py`, driven by environment variables.
+Copy `.env.example` to `.env` and point `PTBR_ARTIFACTS` at the folder that holds
+`datasets/`, `training/` and `models/`:
+
+```
+PTBR_ARTIFACTS=C:\IA\Breeze-tts
+```
+
+The base checkpoint is **not** included. Download `BreezeBlue/Breeze-TTS-2` from
+Hugging Face into `<PTBR_ARTIFACTS>/models/Breeze-TTS-2`.
+
+## Quick start
 
 ```bash
-bash docker/build.sh
+# 1) dataset (codes .npz, splits, gold samples)
+python ptbr_lora/core/prepare_dataset.py process
+python ptbr_lora/core/prepare_dataset.py finalize
+
+# 2) smoke test + training
+python ptbr_lora/core/train_lora.py --run smoke --smoke --steps 30
+python ptbr_lora/core/train_lora.py --run r64_02 --epochs 2 \
+  --rank 64 --alpha 64 --targets all --use-rslora --ref-edit-frac 0.9 --lr 3e-5
+
+# 3) evaluation
+python ptbr_lora/eval/eval_val_full.py --adapters <ckpt> --out results.json
 ```
 
-The default image targets H100/Hopper (sm90). For A100:
+See [`docs/TRAINING.md`](docs/TRAINING.md) and [`docs/EVALUATION.md`](docs/EVALUATION.md).
 
-```bash
-FLASH_ATTN_CUDA_ARCHS=80 bash docker/build.sh
-```
+## Inference
 
-### 🎙️ Voice Clone
+To run the adapter (or the base model) through the web UI / CLI, use the
+companion repository: **[EdnilsonMonteiro/breeze-tts2-ptbr](https://github.com/EdnilsonMonteiro/breeze-tts2-ptbr)**.
 
-Clone a speaker from clean reference audio and its exact transcript.
+## Research status
 
-#### English
+**No trained model/adapter is released yet.** The pipeline here produced a first
+multi-speaker pt-BR LoRA (r=64, rsLoRA) on a ~204 h multi-corpus dataset; more
+training runs are planned before any adapter is published (Hugging Face or here).
+A methodological caveat is documented in the papers/drafts kept outside this
+repository: the reference-free and reference-conditioned runs also differ in
+learning rate, so the training-distribution effect is reported as a **joint
+data-and-optimizer intervention**, not an isolated ablation.
 
-```bash
-python infer.py ../breeze-tts-2 \
-  --ref-audio reference_en.wav \
-  --ref-text "This is the exact transcript of the English reference audio." \
-  --text "(sigh) It is good to hear your voice again after all this time." \
-  --output outputs/voice_clone_en.wav
-```
+## License
 
-#### Chinese
-
-```bash
-python infer.py ../breeze-tts-2 \
-  --ref-audio reference_zh.wav \
-  --ref-text "这是中文参考音频的准确文字稿。" \
-  --text "[叹气] 没想到过了这么久，你还记得我的声音。" \
-  --output outputs/voice_clone_zh.wav
-```
-
-Reference audio should contain clean, non-looping speech with minimal background
-noise. `--ref-text` should match the complete spoken content of the reference
-audio; if speech is repeated in the audio, include those repetitions in the
-transcript. Voice Clone does not use an instruction. Adding `--instruction`
-selects Voice Direction instead.
-
-### 🎨 Voice Design
-
-Create a voice from a natural-language description without reference audio. Match the instruction language to the target text. Use `--cfg-scale 4` to strengthen instruction-following.
-
-#### English
-
-```bash
-python infer.py ../breeze-tts-2 \
-  --text "(sigh) Welcome aboard. Your journey begins now." \
-  --instruction "A warm, thoughtful young woman with a clear voice and a calm, reflective delivery." \
-  --cfg-scale 4 \
-  --output outputs/voice_design_en.wav
-```
-
-#### Chinese
-
-```bash
-python infer.py ../breeze-tts-2 \
-  --text "[笑] 欢迎来到今晚的故事时间，让我们一起开始吧。" \
-  --instruction "一位温柔自信的年轻女性，声音清晰，语气亲切，表达轻快而富有感染力。" \
-  --cfg-scale 4 \
-  --output outputs/voice_design_zh.wav
-```
-
-### 🎛️ Voice Direction
-
-Keep the identity of a reference speaker while directing tone, emotion, pace, and delivery. Use `--cfg-scale 4` to strengthen instruction-following.
-
-```bash
-python infer.py ../breeze-tts-2 \
-  --ref-audio reference.wav \
-  --ref-text "This is the exact transcript of the reference audio." \
-  --text "(clears throat) We need to discuss what happened last night." \
-  --instruction "Speak slowly with a restrained, serious tone." \
-  --cfg-scale 4 \
-  --output outputs/voice_direction.wav
-```
-
-### 🌐 Streaming API
-
-Start the single-concurrency streaming API. It uses the same PyTorch runtime and eager execution by default:
-
-```bash
-python -m breeze_infer.api ../breeze-tts-2 --host 0.0.0.0 --port 7860
-```
-
-Send a Voice Direction request with reference audio and CFG 4:
-
-```bash
-curl -X POST http://127.0.0.1:7860/v1/audio/speech \
-  -F "cfg_scale=4" \
-  -F "ref_audio=@reference.wav" \
-  -F "ref_text=This is the exact transcript of the reference audio." \
-  -F "text=(clears throat) We need to discuss what happened last night." \
-  -F "instruction=Speak slowly with a restrained, serious tone." \
-  -F "seed=42" \
-  --output voice_direction.pcm
-```
-
-The response is streaming mono 24 kHz signed 16-bit little-endian PCM. Start the API with `--fast-all` to enable the fast path.
-
-### ⚡ Fast Inference Options
-
-Both the CLI and API use eager streaming by default and skip graph warmup. Pass `--fast-all` to enable the best configuration for every inference stage when the additional cold-start time is acceptable. Each stage can also be controlled independently:
-
-| Stage | Fast parameter | Disabled | Enabled |
-| --- | --- | --- | --- |
-| Text encoder | `--[no-]fast-text-encoder` | Native eager forward | Static CUDA Graph selected by CFG shape and text-length bucket |
-| Backbone prefill | `--[no-]fast-backbone-prefill` | Native eager prefill | CUDA Graph selected by CFG shape and prompt-length bucket |
-| Backbone decode | `--[no-]fast-backbone-decode` | Native eager token step | StaticCache-backed graph selected by CFG shape |
-| Depth decoder | `--[no-]fast-depth-decoder` | Native eager depth loop | Full-graph compilation with CFG-shape CUDA Graphs |
-| Codec | `--[no-]fast-codec` | Eager streaming decode | Single-request streaming CUDA Graph with one-frame chunks |
-
-Individual stage flags are intended for profiling and debugging.
-
-
-## License and Responsible Use
-
-The source code is licensed under the [Apache License, Version 2.0](https://github.com/breezeblue-ai/breeze-tts/blob/main/LICENSE). The audio tokenizer is based on [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) by the Alibaba Qwen Team and is licensed under the Apache License, Version 2.0. Model weights, checkpoints, adapters, derivative models, and self-hosted outputs are governed separately by the [BreezeBlue Research and Non-Commercial License](https://huggingface.co/BreezeBlue/Breeze-TTS-2/blob/main/LICENSE). The Apache License does not grant rights to use the model commercially.
-
-If you have an active paid subscription, outputs you generate through BreezeBlue's hosted platform or API at [breezeblue.ai](https://breezeblue.ai/) can be used commercially, subject to our [Terms of Service](https://breezeblue.ai/legal/terms). A paid subscription does not grant commercial rights to the open-weight model or self-hosted outputs.
-
-You are responsible for complying with applicable laws and obtaining all necessary rights and consents for inputs, reference audio, voices, and outputs. Unauthorized voice cloning, impersonation, fraud, and other unlawful or harmful uses are prohibited.
-
-The code and Model Materials are provided "AS IS," without warranties or liability to the maximum extent permitted by law. Third-party components remain subject to their respective licenses.
+- Engine code (upstream): Apache-2.0 ([`LICENSE`](LICENSE)) — from
+  [breezeblue-ai/breeze-tts](https://github.com/breezeblue-ai/breeze-tts).
+- Breeze TTS 2 weights/derivatives: BreezeBlue Research and Non-Commercial
+  (https://huggingface.co/BreezeBlue/Breeze-TTS-2/blob/main/LICENSE). Commercial
+  use requires a separate license.

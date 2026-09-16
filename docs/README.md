@@ -11,7 +11,7 @@ pipeline de treino/avaliação do adaptador LoRA pt-BR sobre o Breeze TTS 2.
 | [TRAINING.md](TRAINING.md) | `train_lora.py`, `auto_train.py` e opções de LoRA |
 | [EVALUATION.md](EVALUATION.md) | val loss, WER/CER e similaridade de locutor |
 
-Visão geral do repositório: [`../PTBR_LORA.md`](../PTBR_LORA.md).
+Visão geral do repositório: [`../README.md`](../README.md).
 
 ## Fluxo típico
 

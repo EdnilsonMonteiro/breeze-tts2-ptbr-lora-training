@@ -11,7 +11,7 @@ que adiciona o codigo de treino/avaliacao do LoRA PT-BR (`ptbr_lora/`).
 
 O engine (codigo Apache-2.0) fica na raiz do fork e **nao foi alterado**; o
 codigo do projeto vive em `ptbr_lora/`. Os pesos (Breeze-TTS-2) **nao** estao no
-repositorio — baixe-os oficialmente (ver `PTBR_LORA.md`). A licenca do modelo
+repositorio — baixe-os oficialmente (ver `README.md`). A licenca do modelo
 (`BreezeBlue Research and Non-Commercial`) esta em
 https://huggingface.co/BreezeBlue/Breeze-TTS-2/blob/main/LICENSE (o upstream
 removeu o arquivo `MODEL_LICENSE` do repositorio de codigo).
