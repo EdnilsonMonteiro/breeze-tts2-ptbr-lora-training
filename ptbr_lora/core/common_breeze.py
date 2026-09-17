@@ -14,6 +14,9 @@ Nao altera nenhum arquivo do repo breeze-tts.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +24,51 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
+class _DropMessage(logging.Filter):
+    """Descarta uma mensagem de log especifica (por substring)."""
+
+    def __init__(self, needle: str) -> None:
+        super().__init__()
+        self._needle = needle
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return self._needle not in record.getMessage()
+
+
+def _silence_known_warnings() -> None:
+    # `transformers` avisa "incorrect regex pattern" e sugere fix_mistral_regex=True,
+    # mas esse flag quebra na versao instalada (TypeError no tokenizers). O modelo foi
+    # treinado com este tokenizer; mantemos o comportamento padrao e silenciamos apenas
+    # esta mensagem especifica.
+    logging.getLogger("transformers.tokenization_utils_base").addFilter(
+        _DropMessage("incorrect regex pattern")
+    )
+
+
+_silence_known_warnings()
+
+
+@contextlib.contextmanager
+def _silence_stdout():
+    """Silencia prints de bibliotecas durante um import (ex.: banner do qwen_tts)."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        yield
+
+
+def import_qwen_tts():
+    """Importa Qwen3TTSTokenizer suprimindo o banner de flash-attn do qwen_tts.
+
+    O `qwen_tts` imprime, no import, um aviso quando flash-attn nao esta instalado
+    (o tokenizer de audio cai no caminho manual em PyTorch — funcional, so mais
+    lento). Instalar flash-attn no Windows nao e pratico, entao suprimimos o banner.
+    """
+    with _silence_stdout():
+        from qwen_tts import Qwen3TTSTokenizer
+
+    return Qwen3TTSTokenizer
+
 
 import numpy as np
 import torch
@@ -109,7 +157,7 @@ def load_text_tokenizer():
 
 
 def load_audio_tokenizer(device: str = "cuda"):
-    from qwen_tts import Qwen3TTSTokenizer
+    Qwen3TTSTokenizer = import_qwen_tts()
 
     return Qwen3TTSTokenizer.from_pretrained(str(CKPT / "audio_tokenizer"), device_map=device)
 

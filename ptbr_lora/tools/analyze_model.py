@@ -27,6 +27,7 @@ _CORE = _PROJ / "ptbr_lora" / "core"
 if str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))
 import paths  # noqa: E402
+import common_breeze as CB  # noqa: E402
 
 REPO = paths.BREEZE_REPO
 CKPT = paths.CKPT
@@ -240,7 +241,7 @@ print(f"  pad_token_id={tok.pad_token_id} eos_token_id={tok.eos_token_id} "
 # ------------------------------------------------------ 6. audio tokenizer
 hr("6. AUDIO TOKENIZER (Qwen3TTSTokenizer, CPU) - smoke")
 try:
-    from qwen_tts import Qwen3TTSTokenizer
+    Qwen3TTSTokenizer = CB.import_qwen_tts()
 
     t0 = time.time()
     audio_tok = Qwen3TTSTokenizer.from_pretrained(str(CKPT / "audio_tokenizer"), device_map="cpu")

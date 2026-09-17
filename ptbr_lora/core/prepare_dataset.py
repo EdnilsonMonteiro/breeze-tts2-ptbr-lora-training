@@ -120,7 +120,8 @@ def parse_csv() -> list[dict]:
 def process(limit: int | None, device: str) -> None:
     import librosa
     import soundfile as sf
-    from qwen_tts import Qwen3TTSTokenizer
+
+    Qwen3TTSTokenizer = CB.import_qwen_tts()
 
     rows = parse_csv()
     n_done_pre = sum(1 for r in rows if (CB.TOKENS_DIR / f"{r['idx']}.npz").exists())
