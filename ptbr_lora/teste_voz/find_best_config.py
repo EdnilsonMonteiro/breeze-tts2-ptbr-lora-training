@@ -68,6 +68,22 @@ def analyze(metrics_csv: Path) -> dict:
     return result
 
 
+def attach_config(res: dict, out: Path) -> dict:
+    """Anexa em res['best_config'] os parametros da config vencedora (via grid.json)."""
+    grid_p = out / "grid.json"
+    if grid_p.is_file():
+        try:
+            import seed_sweep
+
+            for c in json.loads(grid_p.read_text(encoding="utf-8")):
+                if seed_sweep.tag_for(c) == res.get("best_tag"):
+                    res["best_config"] = c
+                    break
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cfg] (aviso) nao anexei best_config: {exc}")
+    return res
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--analyze", default=None, help="metrics.csv: so analisa (nao gera)")
@@ -97,6 +113,7 @@ def main() -> None:
 
     if args.analyze:
         res = analyze(Path(args.analyze))
+        res = attach_config(res, out)
         (out / "best_config.json").write_text(json.dumps(res, indent=1, ensure_ascii=False),
                                               encoding="utf-8")
         print(json.dumps(res, indent=1, ensure_ascii=False))
@@ -115,6 +132,7 @@ def main() -> None:
                     "--out", str(out / "metrics.csv")], check=True)
 
     res = analyze(out / "metrics.csv")
+    res = attach_config(res, out)
     (out / "best_config.json").write_text(json.dumps(res, indent=1, ensure_ascii=False),
                                           encoding="utf-8")
     print("\n[cfg] MELHOR CONFIG:", res["best_tag"])
