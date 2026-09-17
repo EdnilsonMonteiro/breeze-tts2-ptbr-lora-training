@@ -56,21 +56,38 @@ def main() -> None:
         e = metrics.embed(str(w), args.device)
         cos_ref = metrics.cos(e_ref, e)
         cos_phrase = metrics.cos(e_phrase, e) if e_phrase is not None else float("nan")
-        hyp = metrics.transcribe(str(w), device="cpu")
-        wer, cer = metrics.wer_cer(text, hyp)
-        hits = metrics.word_hits(text, hyp, words)
+        try:
+            hyp = metrics.transcribe(str(w), device="cpu")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cmp] (aviso) ASR large-v3 falhou ({type(exc).__name__}); tentando small")
+            try:
+                hyp = metrics.transcribe(str(w), size="small", device="cpu")
+            except Exception as exc2:  # noqa: BLE001
+                print(f"[cmp] (aviso) ASR indisponivel: {exc2}")
+                hyp = ""
+        if hyp:
+            wer, cer = metrics.wer_cer(text, hyp)
+            hits = metrics.word_hits(text, hyp, words)
+        else:
+            wer, cer = float("nan"), float("nan")
+            hits = {k: -1 for k in words}
         pr = metrics.prosody(str(w))
+        c_first, c_last, drift = metrics.temporal_cos(str(w), e_ref, args.device)
         id_score = np.nanmean([cos_ref, cos_phrase])
-        score = 0.6 * id_score + 0.4 * (1.0 - min(wer, 1.0))
+        wer_ok = 0.0 if np.isnan(wer) else min(wer, 1.0)
+        score = 0.6 * id_score + 0.4 * (1.0 - wer_ok)
         rows.append({
             "tag": w.parent.name, "seed": w.stem, "wav": str(w),
             "cos_ref": round(cos_ref, 4), "cos_phrase": round(cos_phrase, 4),
+            "cos_first": round(c_first, 4), "cos_last": round(c_last, 4),
+            "drift": round(drift, 4),
             "wer": round(wer, 4), "cer": round(cer, 4), "score": round(float(score), 4),
             **{f"hit_{k}": int(v) for k, v in hits.items()},
             **pr, "hyp": hyp,
         })
         print(f"[cmp] {i}/{len(wavs)} {w.parent.name}/{w.name}: "
-              f"cos={cos_ref:.3f} ph={cos_phrase:.3f} wer={wer:.3f} score={score:.3f}",
+              f"cos={cos_ref:.3f} ph={cos_phrase:.3f} drift={drift:+.3f} "
+              f"wer={wer:.3f} score={score:.3f}",
               flush=True)
 
     fields = list(rows[0].keys())
@@ -94,6 +111,7 @@ def main() -> None:
             "wer": float(np.mean([r["wer"] for r in rs])),
             "score": float(np.mean([r["score"] for r in rs])),
             "score_std": float(np.std([r["score"] for r in rs])),
+            "drift": float(np.mean([r["drift"] for r in rs])),
             "dur": float(np.mean([r["dur"] for r in rs])),
         }
 
@@ -104,10 +122,11 @@ def main() -> None:
              f"- texto-alvo: `{text[:70]}...`",
              f"- `score = 0.6*identidade(cos) + 0.4*(1-WER)`", "",
              "## Por configuracao (media)", "",
-             "| tag | n | cos_ref | cos_phr | WER | score | dur(s) |",
-             "|---|---|---|---|---|---|---|"]
+             "| tag | n | cos_ref | cos_phr | drift | WER | score | dur(s) |",
+             "|---|---|---|---|---|---|---|---|"]
     for t, a in cfg_rows:
         lines.append(f"| `{t}` | {a['n']} | {a['cos_ref']:.3f} | {a['cos_phrase']:.3f} | "
+                     f"{a['drift']:+.3f} | "
                      f"{a['wer']:.3f} | **{a['score']:.3f}** | {a['dur']:.1f} |")
     top = sorted(rows, key=lambda r: -r["score"])[:10]
     lines += ["", "## Top 10 seeds (global)", "",

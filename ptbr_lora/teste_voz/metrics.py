@@ -57,6 +57,39 @@ def cos(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
 
 
+def embed_array(y: np.ndarray, device: str = "cpu") -> np.ndarray:
+    """Embedding ECAPA de um array mono 16 kHz."""
+    import torch
+
+    clf = load_ecapa(device)
+    x = torch.from_numpy(np.asarray(y, dtype=np.float32)).unsqueeze(0).to(device)
+    with torch.no_grad():
+        e = clf.encode_batch(x).squeeze()
+    e = e / (e.norm() + 1e-9)
+    return e.detach().cpu().numpy().astype(np.float32)
+
+
+def temporal_cos(path, ref_emb: np.ndarray, device: str = "cpu",
+                 seg_s: float = 6.0) -> tuple[float, float, float]:
+    """cos(ref, inicio) , cos(ref, fim) e deriva (inicio - fim).
+
+    Mede a observacao "comeca parecido e depois perde a referencia": deriva
+    positiva grande = a identidade cai ao longo do audio.
+    """
+    import librosa
+
+    y, _ = librosa.load(str(path), sr=16000, mono=True)
+    n = int(seg_s * 16000)
+    if len(y) < 2 * n:
+        m = max(1, len(y) // 2)
+        first, last = y[:m], y[-m:]
+    else:
+        first, last = y[:n], y[-n:]
+    c_first = cos(ref_emb, embed_array(first, device))
+    c_last = cos(ref_emb, embed_array(last, device))
+    return c_first, c_last, c_first - c_last
+
+
 # ----------------------------------------------------------- inteligibilidade
 def load_asr(size: str = "large-v3", device: str = "cpu", compute_type: str = "int8"):
     global _ASR, _ASR_KEY
