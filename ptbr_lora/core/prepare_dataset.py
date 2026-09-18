@@ -312,7 +312,10 @@ def _chunk_speaker_map() -> dict[str, str]:
 _SPK_MAP: dict[str, str] | None = None
 
 
-REF_EDIT_FRAC = 0.5
+REF_EDIT_FRAC = 1.0
+# Mistura CPM (VoiceStar): ~30% self-ref (prompt = o proprio clipe / continuacao)
+# + ~70% cross-ref (prompt = outro clipe do mesmo locutor). Ver docs/consistencia.
+SELF_REF_FRAC = 0.30
 
 
 def set_ref_edit_frac(frac: float) -> None:
@@ -373,11 +376,59 @@ def _rec_by_idx() -> dict[str, dict]:
 _REC_BY_IDX: dict[str, dict] | None = None
 
 
+_CANONICAL_REFS: dict[str, str] | None = None
+
+
+def _canonical_refs() -> dict[str, str]:
+    """speaker -> idx de UMA referencia canonica (reusada em TODAS as linhas dele).
+
+    Preferencia: o clipe mais usado como `ref_idx` no ref_map (proxy barato de
+    medoid) entre os indices do split de treino. Sem ref_map (cml/cetuc/podcast),
+    escolhe um indice determinístico (menor sha1) do pool de treino do locutor.
+    """
+    global _CANONICAL_REFS
+    if _CANONICAL_REFS is not None:
+        return _CANONICAL_REFS
+    train = set(load_split_file("train"))
+    counts: dict[str, dict[str, int]] = {}
+    for r in load_meta():
+        ridx = r.get("ref_idx")
+        if ridx and r["idx"] in train and ridx in train and ridx != r["idx"]:
+            spk = r.get("speaker", "tata")
+            counts.setdefault(spk, {})
+            counts[spk][ridx] = counts[spk].get(ridx, 0) + 1
+    canon: dict[str, str] = {}
+    for spk, idxs in _speaker_pool().items():
+        if not idxs:
+            continue
+        c = counts.get(spk)
+        if c:
+            canon[spk] = max(c.items(), key=lambda kv: kv[1])[0]
+        else:
+            canon[spk] = min(idxs, key=lambda i: hashlib.sha1(i.encode()).hexdigest())
+    _CANONICAL_REFS = canon
+    return canon
+
+
+def canonical_ref_rec(rec: dict) -> dict | None:
+    rid = _canonical_refs().get(rec.get("speaker", "tata"))
+    if rid and rid != rec["idx"]:
+        return _rec_by_idx().get(rid)
+    return None
+
+
 def pick_ref_rec(rec: dict) -> dict:
-    """Referencia do MESMO locutor. Prioridade: ref_map (idx->ref_idx com guarda
-    de similaridade); senao pool por speaker + hash; senao self-ref."""
+    """Referencia do MESMO locutor.
+
+    1) referencia CANONICA do locutor (a mesma em todas as linhas dele);
+    2) ref_map (idx->ref_idx com guarda de similaridade);
+    3) pool por speaker + hash; 4) self-ref (fallback).
+    """
+    cr = canonical_ref_rec(rec)
+    if cr is not None:
+        return cr
     ridx = rec.get("ref_idx")
-    if ridx:
+    if ridx and ridx != rec["idx"]:
         rr = _rec_by_idx().get(ridx)
         if rr is not None:
             return rr
@@ -399,7 +450,9 @@ def build_item(tokenizer, rec: dict, variant: str) -> dict[str, object]:
     n_frames = CB.register_codes(wav_key, CB.TOKENS_DIR / f"{rec['idx']}.npz")
     instruction = instruction_for_rec(rec)
     if variant == "ref_edit_auto":
-        ref_rec = pick_ref_rec(rec)
+        # CPM (VoiceStar): ~30% self-ref (continuacao) + ~70% cross-ref
+        h_self = hashlib.sha1(("self:" + rec["idx"]).encode()).digest()[0] / 255.0
+        ref_rec = rec if h_self < SELF_REF_FRAC else pick_ref_rec(rec)
         ref_key = str(CB.WAVS24_DIR / f"{ref_rec['idx']}.wav")
         n_ref = CB.register_codes(ref_key, CB.TOKENS_DIR / f"{ref_rec['idx']}.npz")
         req = CB.ExampleRequest(
@@ -443,26 +496,45 @@ def finalize(num_gold: int, parity_device: str) -> None:
     assert len(recs) >= 100, "rode o 'process' completo antes do finalize"
 
     # split ESTRATIFICADO POR CORPUS (train/val/test em cada fonte de dados)
+    # Split DISJUNTO POR LOCUTOR (nenhum locutor em treino E val/test), por corpus.
+    import random as _random
+
     cuts: dict[str, list[str]] = {"train": [], "val": [], "test": []}
-    by_corpus: dict[str, list[str]] = {}
+    by_corpus: dict[str, dict[str, list[str]]] = {}
     for r in recs:
-        by_corpus.setdefault(r.get("corpus", "tata"), []).append(r["idx"])
-    for corpus, lst in by_corpus.items():
-        idxs = sorted(lst)
-        rng = __import__("random").Random(42)
-        rng.shuffle(idxs)
-        n = len(idxs)
-        if n < 40:
-            cuts["train"].extend(idxs)
-            print(f"[finalize] corpus '{corpus}': {n} itens -> train (pequeno)")
-            continue
-        cuts["train"].extend(idxs[: int(n * 0.9)])
-        cuts["val"].extend(idxs[int(n * 0.9): int(n * 0.95)])
-        cuts["test"].extend(idxs[int(n * 0.95):])
-        print(f"[finalize] corpus '{corpus}': train={int(n*0.9)} val/test={n - int(n*0.9)}")
+        cor = r.get("corpus", "tata")
+        by_corpus.setdefault(cor, {}).setdefault(r.get("speaker", r["idx"]), []).append(r["idx"])
+    rng = _random.Random(42)
+    for corpus, groups in by_corpus.items():
+        speakers = sorted(groups)
+        rng.shuffle(speakers)
+        total = sum(len(groups[s]) for s in speakers)
+        t_cut, v_cut = 0.90 * total, 0.95 * total
+        n_tr = n_va = 0
+        for s in speakers:
+            size = len(groups[s])
+            if n_tr < t_cut:
+                dest, n_tr = "train", n_tr + size
+            elif n_tr + n_va < v_cut:
+                dest, n_va = "val", n_va + size
+            else:
+                dest = "test"
+            cuts[dest].extend(groups[s])
+        print(f"[finalize] corpus '{corpus}': speakers={len(speakers)} total={total} "
+              f"train={n_tr} val={n_va} test={total - n_tr - n_va}")
     for name, lst in cuts.items():
         (CB.TRAINING / f"splits_{name}.txt").write_text("\n".join(lst), encoding="utf-8")
     print({k: len(v) for k, v in cuts.items()})
+
+    # Auditoria: nenhum locutor pode aparecer em dois splits (falha alto se houver).
+    spk_of = {r["idx"]: r.get("speaker", r["idx"]) for r in recs}
+    tr_spk = {spk_of[i] for i in cuts["train"]}
+    va_spk = {spk_of[i] for i in cuts["val"]}
+    te_spk = {spk_of[i] for i in cuts["test"]}
+    leaks = (tr_spk & va_spk) | (tr_spk & te_spk) | (va_spk & te_spk)
+    assert not leaks, f"vazamento de locutor entre splits: {sorted(leaks)[:5]}"
+    print(f"[finalize] split por locutor OK "
+          f"(train {len(tr_spk)} | val {len(va_spk)} | test {len(te_spk)})")
 
     tokenizer = CB.load_text_tokenizer()
 
@@ -471,6 +543,9 @@ def finalize(num_gold: int, parity_device: str) -> None:
     rec_by_idx = {r["idx"]: r for r in recs}
     g_idx = cuts["val"][: max(1, num_gold // 2)] + cuts["test"][: max(1, num_gold - num_gold // 2)]
     gold_recs = [rec_by_idx[i] for i in g_idx if rec_by_idx[i].get("corpus", "tata") == "tata"]
+    if not gold_recs:  # split por locutor tirou o tata de val/test (corpus de 1 locutor)
+        gold_recs = [rec_by_idx[i] for i in cuts["train"]
+                     if rec_by_idx[i].get("corpus", "tata") == "tata"][:num_gold]
     CB.GOLD_DIR.mkdir(parents=True, exist_ok=True)
 
     parity_fail = 0

@@ -35,8 +35,8 @@ SPK_P = TAG / "speakers.jsonl"
 REF_P = TAG / "ref_map.jsonl"
 ECAPA_DIR = paths.SCRAPING_WORK / "spkrec-ecapa"
 
-CLUSTER_DIST = 0.45   # distancia 1-cos no linkage average (cos>=0.55 no cluster)
-REF_MIN_COS = 0.55    # similaridade minima alvo<->ref
+CLUSTER_DIST = 0.30   # distancia 1-cos no linkage average (cos>=0.70 no cluster)
+REF_MIN_COS = 0.70    # similaridade minima alvo<->ref (era 0.55; ver docs/consistencia)
 MIN_CLUSTER = 2       # clusters com menos clipes sao dissolvidos
 
 
@@ -91,7 +91,7 @@ def main() -> None:
         if len(lst) < 2:
             for i in lst:
                 spk_rows.append({"idx": i, "speaker": f"tag:{sh}:00"})
-                ref_rows.append({"idx": i, "ref_idx": i, "cos": 1.0})
+                # sem self-ref: par unico nao gera referencia (evita "copie o audio")
             n_spk += 1
             continue
         M = np.array([E[i] for i in lst])
@@ -104,7 +104,7 @@ def main() -> None:
             if len(members) < MIN_CLUSTER:
                 for i in members:
                     spk_rows.append({"idx": i, "speaker": f"tag:{sh}:99"})
-                    ref_rows.append({"idx": i, "ref_idx": i, "cos": 1.0})
+                    # sem self-ref (cluster dissolvido nao gera referencia)
                 n_spk += 1
                 continue
             name = f"tag:{sh}:{n_spk:03d}"
@@ -119,11 +119,13 @@ def main() -> None:
                 sims = S[j].copy()
                 sims[j] = -1
                 order = np.argsort(-sims)
-                ref_i, ref_cos = i, 1.0
+                ref_i, ref_cos = None, 0.0
                 for k in order:
                     if sims[k] >= REF_MIN_COS and members[k] != i:
                         ref_i, ref_cos = members[k], float(sims[k])
                         break
+                if ref_i is None:
+                    continue  # sem par >= limiar -> sem self-ref (fica sem referencia)
                 ref_rows.append({"idx": i, "ref_idx": ref_i, "cos": round(ref_cos, 3)})
 
     SPK_P.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in spk_rows),

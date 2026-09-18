@@ -36,6 +36,10 @@ import prepare_dataset as PD
 
 CB.GOLD_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(CB.REPO))
+# eval/ fora do pacote (eval_wer) precisa estar no path para o WER por checkpoint
+_EVAL_DIR = _CORE.parent / "eval"
+if str(_EVAL_DIR) not in sys.path:
+    sys.path.insert(0, str(_EVAL_DIR))
 
 import numpy as np
 import torch
@@ -69,8 +73,8 @@ TARGET_PRESETS = {
     "all": ["q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj"],
 }
-DEFAULT_CORPUS_WEIGHTS = {"tagarela": 1.0, "cetuc": 1.0, "cml_pt": 2.0,
-                          "podcast": 2.0, "tata": 2.0}
+DEFAULT_CORPUS_WEIGHTS = {"tagarela": 0.7, "cetuc": 2.0, "cml_pt": 2.0,
+                          "podcast": 1.5, "tata": 1.0}
 
 
 def slug(s: str) -> str:
@@ -287,7 +291,7 @@ def main() -> None:
     ap.add_argument("--targets", choices=sorted(TARGET_PRESETS), default="attn",
                     help="attn = q/k/v/o | all = + gate/up/down (MLPs)")
     ap.add_argument("--use-rslora", action="store_true")
-    ap.add_argument("--ref-edit-frac", type=float, default=0.9,
+    ap.add_argument("--ref-edit-frac", type=float, default=1.0,
                     help="fracao de exemplos em modo ref_edit (com referencia)")
     ap.add_argument("--val-items", type=int, default=96)
     ap.add_argument("--corpus-weights", type=str, default=None,
@@ -413,6 +417,8 @@ def main() -> None:
                 "opt_steps_total": opt_steps_total,
                 "trainable_params": n_train,
                 "per_stack": stats,
+                "lora_scale": (args.alpha / (args.rank ** 0.5)) if args.use_rslora
+                else (args.alpha / max(1, args.rank)),
             },
             indent=2,
         ),
@@ -571,19 +577,24 @@ def main() -> None:
 
         if not args.smoke:
             vl, per_corpus = quick_val_loss(raw, ds_val, n_items=args.val_items)
+            # val util = media cross-clip (tata e self-ref e polui a media agregada)
+            cross = [v for c, v in per_corpus.items() if c != "tata" and v == v]
+            vl_cross = float(np.mean(cross)) if cross else vl
             log_f.write(
-                f"{global_step},{epoch},{global_step},nan,nan,nan,{vl:.4f},"
+                f"{global_step},{epoch},{global_step},nan,nan,nan,{vl_cross:.4f},"
                 f"nan,nan,{torch.cuda.max_memory_allocated() / 2**30:.2f},nan\n"
             )
             log_f.flush()
             msg = " ".join(f"{c}={v:.3f}" for c, v in sorted(per_corpus.items()))
-            print(f"[epoca {epoch}] val_loss={vl:.4f} | {msg}")
+            print(f"[epoca {epoch}] val_loss={vl:.4f} "
+                  f"(cross-clip={vl_cross:.4f}, tata fora) | {msg}")
             if tb is not None:
                 tb.add_scalar("val/loss", vl, global_step)
+                tb.add_scalar("val/loss_cross", vl_cross, global_step)
                 for c, v in per_corpus.items():
                     tb.add_scalar(f"val/{c}", v, global_step)
                 tb.flush()
-            save_checkpoint(f"epoch{epoch}_val{vl:.3f}".replace(".", "_"))
+            save_checkpoint(f"epoch{epoch}_val{vl_cross:.3f}".replace(".", "_"))
             ep_samples = samples_dir / f"checkpoint-epoch{epoch}"
             generate_samples(raw, tokenizer, ep_samples, f"ep{epoch}", seed0=2000 + epoch)
             run_wer(ep_samples)

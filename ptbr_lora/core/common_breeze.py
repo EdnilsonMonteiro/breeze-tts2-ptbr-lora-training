@@ -145,6 +145,9 @@ INSTRUCTION_POOL = [
     "Leia o texto com entonacao de leitura informativa.",
     "Produza uma leitura limpa e expressiva.",
     "Fale com naturalidade, como um narrador brasileiro.",
+    # Instrucao de PRODUCAO (mesma string usada na UI/gerar_em_blocos): a
+    # instrucao de inferencia precisa existir no treino (docs/consistencia).
+    "Fale com clareza e naturalidade.",
 ]
 
 # ------------------------------------------------------------------ loaders
