@@ -63,7 +63,9 @@ def analyze(metrics_csv: Path) -> dict:
 
     ranked = sorted(((t, agg(rs)) for t, rs in by_tag.items()), key=lambda x: -x[1]["score"])
     best_tag, best = ranked[0]
-    result = {"best_tag": best_tag, "best": best,
+    best_rows = by_tag[best_tag]
+    best_seed = max(best_rows, key=lambda r: float(r["score"]))["seed"]
+    result = {"best_tag": best_tag, "best": best, "best_seed": best_seed,
               "ranking": [{"tag": t, **a} for t, a in ranked]}
     return result
 
