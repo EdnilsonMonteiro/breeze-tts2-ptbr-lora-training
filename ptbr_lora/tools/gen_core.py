@@ -22,14 +22,22 @@ DEFAULT_ADAPTER = str(
 )
 
 
-def apply_adapter_scale(model, scale: float) -> int:
-    """Seta a escala do adapter LoRA (0.3-1.0 atenua over-steering). Retorna n modulos."""
+def apply_adapter_scale(model, factor: float) -> int:
+    """Multiplica a escala TREINADA do adapter por `factor` (1.0 = como treinado).
+
+    Ex.: rsLoRA r=64 alpha=64 -> escala treinada 8.0; factor=0.5 -> 4.0 (atenuado).
+    Retorna o numero de modulos LoRA ajustados.
+    """
     n = 0
     for m in model.modules():
         sc = getattr(m, "scaling", None)
-        if isinstance(sc, dict):
-            for k in list(sc):
-                sc[k] = float(scale)
+        if isinstance(sc, dict) and sc:
+            base = getattr(m, "_ptbr_base_scaling", None)
+            if base is None:
+                base = dict(sc)
+                m._ptbr_base_scaling = base
+            for k, v in base.items():
+                sc[k] = float(v) * float(factor)
                 n += 1
     return n
 
