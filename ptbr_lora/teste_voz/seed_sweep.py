@@ -53,7 +53,7 @@ def tag_for(cfg: dict) -> str:
     t = f"T{cfg['temperature']:g}_k{cfg['top_k']}_p{cfg['top_p']:g}_cfg{cfg['cfg_scale']:g}"
     if cfg.get("use_dual_cfg"):
         t += f"_dual{cfg.get('cfg_ref', 1.0):g}-{cfg.get('cfg_ins', 1.0):g}"
-    if cfg.get("template") != "ref_edit_tata":
+    if cfg.get("template") not in (None, "ref_edit_tata"):
         t += f"_{cfg['template']}"
     return t
 

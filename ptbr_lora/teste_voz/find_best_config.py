@@ -31,6 +31,9 @@ def build_grid(temps: list[float], profiles: list[str], top_k: int,
     prof_defs = {
         "plain": {"cfg_scale": 1.0},
         "cfg2": {"cfg_scale": 2.0},
+        "dual12": {"use_dual_cfg": True, "cfg_scale": 1.0, "cfg_ref": 1.2, "cfg_ins": 1.0},
+        "dual15": {"use_dual_cfg": True, "cfg_scale": 1.0, "cfg_ref": 1.5, "cfg_ins": 1.0},
+        "dual2": {"use_dual_cfg": True, "cfg_scale": 1.0, "cfg_ref": 2.0, "cfg_ins": 1.0},
         "dual3": {"use_dual_cfg": True, "cfg_scale": 1.0, "cfg_ref": 3.0, "cfg_ins": 1.0},
         "dual5": {"use_dual_cfg": True, "cfg_scale": 1.0, "cfg_ref": 5.0, "cfg_ins": 1.0},
     }
@@ -41,7 +44,16 @@ def build_grid(temps: list[float], profiles: list[str], top_k: int,
     return grid
 
 
-def analyze(metrics_csv: Path) -> dict:
+def analyze(metrics_csv: Path, max_wer: float = 0.03) -> dict:
+    """Escolhe a melhor config SEM sacrificar pronuncia.
+
+    Criterio: entre as configs com WER medio <= `max_wer` (elegiveis), escolhe a
+    de maior identidade media ((cos_ref+cos_phrase)/2). Se nenhuma passar, avisa e
+    cai para o ranking por `score` (identidade + 1-WER). Assim o dual-CFG so ganha
+    se a pronuncia se mantiver.
+    """
+    import re
+
     rows = list(csv.DictReader(metrics_csv.open(encoding="utf-8")))
     if not rows:
         raise SystemExit(f"[cfg] metrics vazio: {metrics_csv}")
@@ -51,10 +63,13 @@ def analyze(metrics_csv: Path) -> dict:
 
     def agg(rs):
         n = len(rs)
+        cos_ref = sum(float(x["cos_ref"]) for x in rs) / n
+        cos_phrase = sum(float(x["cos_phrase"]) for x in rs) / n
         return {
             "n": n,
-            "cos_ref": sum(float(x["cos_ref"]) for x in rs) / n,
-            "cos_phrase": sum(float(x["cos_phrase"]) for x in rs) / n,
+            "cos_ref": cos_ref,
+            "cos_phrase": cos_phrase,
+            "identity": (cos_ref + cos_phrase) / 2,
             "wer": sum(float(x["wer"]) for x in rs) / n,
             "score": sum(float(x["score"]) for x in rs) / n,
             "score_std": (sum((float(x["score"]) -
@@ -62,10 +77,18 @@ def analyze(metrics_csv: Path) -> dict:
         }
 
     ranked = sorted(((t, agg(rs)) for t, rs in by_tag.items()), key=lambda x: -x[1]["score"])
-    best_tag, best = ranked[0]
+    eligible = [(t, a) for t, a in ranked if a["wer"] <= max_wer]
+    if not eligible:
+        print(f"[cfg] (aviso) nenhuma config com WER <= {max_wer}; usando score")
+        eligible = ranked
+    best_tag, best = max(eligible, key=lambda x: x[1]["identity"])
+
     best_rows = by_tag[best_tag]
-    best_seed = max(best_rows, key=lambda r: float(r["score"]))["seed"]
+    best_seed_raw = max(best_rows, key=lambda r: float(r["score"]))["seed"]
+    m = re.search(r"\d+", str(best_seed_raw))
+    best_seed = int(m.group()) if m else best_seed_raw
     result = {"best_tag": best_tag, "best": best, "best_seed": best_seed,
+              "max_wer": max_wer, "eligible": [t for t, _ in eligible],
               "ranking": [{"tag": t, **a} for t, a in ranked]}
     return result
 
@@ -97,6 +120,8 @@ def main() -> None:
     ap.add_argument("--top-k", type=int, default=50)
     ap.add_argument("--top-p", type=float, default=1.0)
     ap.add_argument("--max-new-tokens", type=int, default=1200)
+    ap.add_argument("--max-wer", type=float, default=0.03,
+                    help="WER medio maximo para uma config ser elegivel (nao sacrificar pronuncia)")
     ap.add_argument("--out-dir", default=str(HERE / "teste_seeds"))
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
@@ -114,7 +139,7 @@ def main() -> None:
         return
 
     if args.analyze:
-        res = analyze(Path(args.analyze))
+        res = analyze(Path(args.analyze), max_wer=args.max_wer)
         res = attach_config(res, out)
         (out / "best_config.json").write_text(json.dumps(res, indent=1, ensure_ascii=False),
                                               encoding="utf-8")
@@ -133,7 +158,7 @@ def main() -> None:
     subprocess.run([PY, str(HERE / "compare_seeds.py"), "--dir", str(out),
                     "--out", str(out / "metrics.csv")], check=True)
 
-    res = analyze(out / "metrics.csv")
+    res = analyze(out / "metrics.csv", max_wer=args.max_wer)
     res = attach_config(res, out)
     (out / "best_config.json").write_text(json.dumps(res, indent=1, ensure_ascii=False),
                                           encoding="utf-8")
