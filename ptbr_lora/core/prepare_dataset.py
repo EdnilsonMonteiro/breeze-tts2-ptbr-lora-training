@@ -328,7 +328,7 @@ def deterministic_variant(idx: str, rec: dict | None = None) -> str:
     """ref_edit (com referencia) ou tts_instruction (sem), por hash do idx.
     ref_edit_auto usa locutor (ref_map/pool); Tata e fallback ficam self-ref."""
     h = hashlib.sha1(idx.encode()).digest()[0]
-    if (h / 255.0) >= REF_EDIT_FRAC:
+    if (h / 256.0) >= REF_EDIT_FRAC:
         return "tts_instruction"
     if rec is not None and rec.get("speaker") and rec["speaker"] != "tata":
         return "ref_edit_auto"
