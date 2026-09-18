@@ -45,9 +45,6 @@ cookies.txt
 # Arquivos pessoais/locais (espelham a raiz; nao publicados)
 .local/
 
-# Testes locais de voz (audio/resultados fora do git; scripts ficam no branch exp/*)
-ptbr_lora/teste_voz/**/*.wav
-ptbr_lora/teste_voz/**/*.m4a
-ptbr_lora/teste_voz/**/*.mp3
-ptbr_lora/teste_voz/teste_seeds/
+# Testes locais de voz (nada em teste_voz entra no repositorio)
+ptbr_lora/teste_voz/
 

@@ -1,1 +1,0 @@
-Algumas palavras não estão funcionando corretamente, mesmo apesar do treinamento a mais que foi feito. Creio que talvez elas não estivessem nos dados de teste. Vou tentar dizer mais uma: carro, arroz, lataria, barroso, fixo.
