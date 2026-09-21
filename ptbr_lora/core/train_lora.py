@@ -286,6 +286,10 @@ def main() -> None:
     ap.add_argument("--grad-acc", type=int, default=None)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--warmup", type=int, default=50)
+    ap.add_argument("--lr-floor", type=float, default=0.0,
+                    help="piso do LR (fracao do lr); >0 ativa cosseno com restarts")
+    ap.add_argument("--lr-cycles", type=int, default=3,
+                    help="numero de ciclos cosseno quando --lr-floor > 0")
     ap.add_argument("--rank", type=int, default=16)
     ap.add_argument("--alpha", type=int, default=32)
     ap.add_argument("--targets", choices=sorted(TARGET_PRESETS), default="attn",
@@ -435,6 +439,14 @@ def main() -> None:
     def lr_lambda(step):
         if step < args.warmup:
             return step / max(1, args.warmup)
+        if args.lr_floor > 0.0:
+            # cosseno com PISO e restarts (evita o LR chegar a ~0 e congelar o
+            # depth decoder; ver docs/consistencia secao 6.2)
+            n_cyc = max(1, int(args.lr_cycles))
+            cycle = max(1, int(opt_steps_total / n_cyc))
+            pos = (step - args.warmup) % cycle
+            prog = min(1.0, pos / max(1, cycle - args.warmup))
+            return args.lr_floor + (1.0 - args.lr_floor) * 0.5 * (1 + math.cos(math.pi * prog))
         prog = (step - args.warmup) / max(1, opt_steps_total - args.warmup)
         return 0.5 * (1 + math.cos(math.pi * min(prog, 1.0)))
 
