@@ -85,6 +85,7 @@ if str(CORE_DIR) not in sys.path:
 import paths  # noqa: E402
 
 REPO = paths.BREEZE_REPO
+ARTIFACTS = paths.ARTIFACTS
 CKPT = paths.CKPT
 DATASET = paths.DATASET
 TRAINING = paths.TRAINING
