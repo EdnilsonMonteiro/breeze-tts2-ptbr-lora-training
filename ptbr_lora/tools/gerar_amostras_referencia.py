@@ -32,6 +32,7 @@ for _p in (str(_CORE), str(_ROOT)):
         sys.path.insert(0, _p)
 import common_breeze as CB  # noqa: E402
 import gen_core  # noqa: E402
+import text_norm  # noqa: E402
 
 SAMPLE_TEXTS = [
     ("ola-pt", "Olá! Este é um teste de voz em português brasileiro."),
@@ -123,7 +124,8 @@ def main() -> None:
             print(f"[ref] {p.name}: existe, pulando")
             continue
         t0 = time.time()
-        wav, sr = gen_core.generate_one(model, tok, atok, cfg, 42, ref, ref_text, text, args.device)
+        wav, sr = gen_core.generate_one(
+            model, tok, atok, cfg, 42, ref, ref_text, text_norm.normalize(text), args.device)
         sf.write(str(p), np.clip(wav, -1.0, 1.0), int(sr), subtype="PCM_16")
         print(f"[ref] {p.name}: {len(wav)/sr:.1f}s em {time.time()-t0:.0f}s -> {p}", flush=True)
     print("[ref] FIM")

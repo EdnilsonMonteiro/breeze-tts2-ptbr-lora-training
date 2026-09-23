@@ -49,6 +49,7 @@ import soundfile as sf  # noqa: E402
 
 import metrics  # noqa: E402
 import gen_core  # noqa: E402
+import text_norm  # noqa: E402
 
 DEFAULT_WORKSPACE = Path(r"C:\IA\Breeze-tts\voices")
 SR = 24_000
@@ -201,6 +202,7 @@ def main() -> None:
     text = a.text or (Path(a.text_file).read_text(encoding="utf-8").strip() if a.text_file else None)
     if not text:
         raise SystemExit("[gen] informe --text ou --text-file")
+    text = text_norm.normalize(text)  # numeros por extenso (fala melhor + conta palavras)
 
     workspace = Path(a.workspace)
     if a.ref_audio:
