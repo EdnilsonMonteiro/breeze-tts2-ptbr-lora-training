@@ -85,6 +85,10 @@ def main() -> None:
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--instruction", default="Fale com clareza e naturalidade.")
+    ap.add_argument("--candidates", type=int, default=1,
+                    help="N seeds por frase; grava o MEDOID (median-of-N). Reduz a "
+                         "variancia da amostra unica que distorce o SECS")
+    ap.add_argument("--tag", default=None, help="forca o sufixo do arquivo (default = nome do adapter)")
     args = ap.parse_args()
 
     ref = Path(args.ref_audio)
@@ -98,7 +102,7 @@ def main() -> None:
         adapter = _latest_checkpoint(args.run)
     else:
         adapter = args.adapter
-    tag = "base" if not adapter else Path(adapter).name
+    tag = args.tag or ("base" if not adapter else Path(adapter).name)
     out = Path(args.out) if args.out else (CB.TRAINING / "runs" / args.run / "reference")
     out.mkdir(parents=True, exist_ok=True)
 
@@ -118,16 +122,41 @@ def main() -> None:
         "temperature": args.temperature, "top_k": 50, "top_p": 1.0,
         "max_new_tokens": 1200, "speaker": "S0",
     }
+    n_cand = max(1, int(args.candidates))
+    cand_dir = out / "_candidates"
     for i, (slug, text) in enumerate(SAMPLE_TEXTS):
         p = out / f"{i:02d}_{slug}_{tag}.wav"
         if p.exists():
             print(f"[ref] {p.name}: existe, pulando")
             continue
         t0 = time.time()
-        wav, sr = gen_core.generate_one(
-            model, tok, atok, cfg, 42, ref, ref_text, text_norm.normalize(text), args.device)
-        sf.write(str(p), np.clip(wav, -1.0, 1.0), int(sr), subtype="PCM_16")
-        print(f"[ref] {p.name}: {len(wav)/sr:.1f}s em {time.time()-t0:.0f}s -> {p}", flush=True)
+        norm_text = text_norm.normalize(text)
+        if n_cand == 1:
+            wav, sr = gen_core.generate_one(
+                model, tok, atok, cfg, 42, ref, ref_text, norm_text, args.device)
+            sf.write(str(p), np.clip(wav, -1.0, 1.0), int(sr), subtype="PCM_16")
+            print(f"[ref] {p.name}: {len(wav)/sr:.1f}s em {time.time()-t0:.0f}s -> {p}",
+                  flush=True)
+            continue
+        # protocolo medoid: gera N seeds, escolhe a geracao mais CENTRAL
+        cand_dir.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for k in range(n_cand):
+            wav, sr = gen_core.generate_one(
+                model, tok, atok, cfg, 42 + k, ref, ref_text, norm_text, args.device)
+            cp = cand_dir / f"{i:02d}_{slug}_s{42+k:03d}.wav"
+            sf.write(str(cp), np.clip(wav, -1.0, 1.0), int(sr), subtype="PCM_16")
+            paths.append(cp)
+        import metrics  # ECAPA (usa CPU por padrao p/ nao disputar a GPU)
+
+        E = np.stack([metrics.embed(c, "cpu") for c in paths])
+        center = E.mean(axis=0)
+        scores = [metrics.cos(E[j], center) for j in range(len(paths))]
+        best = int(np.argmax(scores))
+        shutil.copy(str(paths[best]), str(p))
+        durs = [round(float(sf.info(str(c)).duration), 1) for c in paths]
+        print(f"[ref] {p.name}: medoid cand#{best}/n={n_cand} durs={durs} "
+              f"em {time.time()-t0:.0f}s -> {p}", flush=True)
     print("[ref] FIM")
 
 

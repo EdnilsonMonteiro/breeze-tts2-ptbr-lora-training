@@ -24,6 +24,7 @@ Default de `--dir`: <PTBR_ARTIFACTS>/training/clone_out
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -107,6 +108,10 @@ def main() -> None:
     ap.add_argument("--others", nargs="*", default=None,
                     help="audios de OUTROS locutores: imprime o piso de dissimilaridade de cada "
                          "metrica (controle obrigatorio antes de confiar no numero)")
+    ap.add_argument("--exclude", nargs="*", default=None,
+                    help="padroes (regex) de nomes a EXCLUIR da mediana. Descarta confusos "
+                         "conhecidos: ex. 'regressao-en' (idioma) e clipes longos demais. "
+                         "Vale a pena reportar a mediana COM e SEM eles.")
     args = ap.parse_args()
 
     D = Path(args.dir)
@@ -165,9 +170,22 @@ def main() -> None:
                   + "  ".join(f"{r.name}={s:.3f}" for r, s in zip(refs, sims)))
 
     if rows:
-        med = float(np.median([np.mean(s) for _, s in rows]))
-        sd = float(np.std([np.mean(s) for _, s in rows]))
+        allv = [np.mean(s) for _, s in rows]
+        med = float(np.median(allv))
+        sd = float(np.std(allv))
         print(f"\n[spk] mediana SECS = {med:.3f} | desvio = {sd:.3f} | n = {len(rows)}")
+        if args.exclude:
+            pats = [re.compile(p) for p in args.exclude]
+            keep = [(n, float(np.mean(s))) for n, s in rows
+                    if not any(p.search(n) for p in pats)]
+            if keep:
+                kv = [v for _, v in keep]
+                print(f"[spk] mediana SECS (SEM {' '.join(args.exclude)}) = "
+                      f"{float(np.median(kv)):.3f} | desvio = {float(np.std(kv)):.3f} "
+                      f"| n = {len(keep)}")
+                print("[spk] descartados por --exclude: "
+                      + ", ".join(n for n, _ in rows
+                                  if any(p.search(n) for p in pats)))
         print("[spk] use a MEDIANA e o DESVIO: a escolha por máximo é ruído (ver "
               "docs/CONSISTENCIA-DE-VOZ.md, secao 3.1)")
 

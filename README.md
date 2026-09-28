@@ -39,6 +39,7 @@ Public, user-facing documentation lives in [`docs/`](docs/README.md):
 | [`docs/DATASETS.md`](docs/DATASETS.md) | corpora download, ingestion, `prepare_dataset.py` |
 | [`docs/TRAINING.md`](docs/TRAINING.md) | `train_lora.py`, `auto_train.py`, LoRA options |
 | [`docs/EVALUATION.md`](docs/EVALUATION.md) | val loss, WER/CER, speaker similarity |
+| [`docs/ESTRATEGIA-PTBR.md`](docs/ESTRATEGIA-PTBR.md) | **new recipe (v2)**: results, WER/SECS, why it improves consistency |
 
 ## Layout
 
@@ -84,10 +85,11 @@ Hugging Face into `<PTBR_ARTIFACTS>/models/Breeze-TTS-2`.
 python ptbr_lora/core/prepare_dataset.py process
 python ptbr_lora/core/prepare_dataset.py finalize
 
-# 2) smoke test + training
+# 2) smoke test + training (receita v2; ver docs/ESTRATEGIA-PTBR.md)
 python ptbr_lora/core/train_lora.py --run smoke --smoke --steps 30
-python ptbr_lora/core/train_lora.py --run r64_02 --epochs 2 \
-  --rank 64 --alpha 64 --targets all --use-rslora --ref-edit-frac 0.9 --lr 3e-5
+python ptbr_lora/core/train_lora.py --run r71_01 --epochs 2 \
+  --rank 64 --alpha 256 --targets attn --ref-edit-frac 1.0 \
+  --lr 3e-5 --lr-floor 0.15 --lr-cycles 3 --batch 2 --grad-acc 16
 
 # 3) evaluation
 python ptbr_lora/eval/eval_val_full.py --adapters <ckpt> --out results.json
@@ -102,13 +104,30 @@ companion repository: **[EdnilsonMonteiro/breeze-tts2-ptbr](https://github.com/E
 
 ## Research status
 
-**No trained model/adapter is released yet.** The pipeline here produced a first
-multi-speaker pt-BR LoRA (r=64, rsLoRA) on a ~204 h multi-corpus dataset; more
-training runs are planned before any adapter is published (Hugging Face or here).
-A methodological caveat is documented in the papers/drafts kept outside this
-repository: the reference-free and reference-conditioned runs also differ in
-learning rate, so the training-distribution effect is reported as a **joint
-data-and-optimizer intervention**, not an isolated ablation.
+**No trained model/adapter is released yet** — more runs are planned before any
+adapter is published (Hugging Face or here).
+
+The current recipe (**v2**, 20/09/2026) changed four things at once versus the
+first runs (`r64_*`): classic LoRA scale `α/r=4.0` instead of `rsLoRA` `α/√r=8.0`;
+an **LR floor** (15 %) with 3 cosine cycles so the LR never collapses to ~0;
+100 % reference-conditioned examples with a **canonical reference per speaker** and
+a cleaned identity signal (`REF_MIN_COS 0.70`, no self-ref); and `batch 2 × grad-acc
+16` to avoid the OOM that killed v1.
+
+**Best adapter so far: `r72_01`** (`--targets all`). It is the best in Portuguese and
+the best voice by ear, and it wins the **corrected** metric too: measuring WER on the
+actual cloning clips (normalized, ASR-confound sentences excluded) gives **0.117**
+(`r72_01`) vs 0.147 (`r70_01`) and 0.167 (`r71_01`), against **0.908** for the frozen
+base. Two metric traps were found and fixed: the training WER was measured on
+reference-free samples (wrong task), and the **speaker-similarity (SECS) metric
+favours the base model** (it tracks channel/timbre, not pronunciation), so it must be
+read only relative to the base. Details, recipe and controls:
+[`docs/ESTRATEGIA-PTBR.md`](docs/ESTRATEGIA-PTBR.md) §3.2–§3.4.
+
+> Earlier caveat (superseded): in the v1 comparisons the reference-free and
+> reference-conditioned runs also differed in learning rate, so that effect was
+> reported as a joint data-and-optimizer intervention. The v2 runs isolate the
+> variables (only `--targets` differs between `r71_01` and `r72_01`).
 
 ## License
 

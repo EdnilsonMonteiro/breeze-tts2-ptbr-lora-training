@@ -14,8 +14,10 @@ from pathlib import Path
 
 _PROJ = Path(__file__).resolve().parents[2]
 _CORE = _PROJ / "ptbr_lora" / "core"
-if str(_CORE) not in sys.path:
-    sys.path.insert(0, str(_CORE))
+_TOOLS = _PROJ / "ptbr_lora" / "tools"
+for _p in (str(_CORE), str(_TOOLS)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 _MODEL = None
 _MODEL_KEY: tuple | None = None
@@ -37,8 +39,21 @@ def _edit(a: list, b: list) -> int:
     return prev[-1]
 
 
-def wer_cer(ref: str, hyp: str) -> tuple[float, float]:
-    r, h = _norm(ref), _norm(hyp)
+def _prep(s: str, do_norm: bool) -> str:
+    """Aplica text_norm (digitos->extenso, siglas->letras) para ALINHAR ref e hyp.
+
+    Sem isto, 'ref quinze oh dois' vs 'hyp 1512' conta como erro de pronuncia que
+    nao houve -- e o WER vira um medidor de formatacao do ASR, nao de fala.
+    """
+    if do_norm:
+        from text_norm import normalize as _tn
+
+        s = _tn(s or "")
+    return s
+
+
+def wer_cer(ref: str, hyp: str, do_norm: bool = False) -> tuple[float, float]:
+    r, h = _norm(_prep(ref, do_norm)), _norm(_prep(hyp, do_norm))
     rw, hw = r.split(), h.split()
     wer = _edit(rw, hw) / max(1, len(rw))
     cer = _edit(list(r.replace(" ", "")), list(h.replace(" ", ""))) / max(1, len(r.replace(" ", "")))
@@ -62,7 +77,7 @@ def _slug(s: str) -> str:
 
 def evaluate_dir(sample_dir: Path, refs: list[tuple[str, str]],
                  size: str = "large-v3", device: str = "cpu",
-                 compute_type: str = "int8") -> list[dict]:
+                 compute_type: str = "int8", do_norm: bool = False) -> list[dict]:
     sample_dir = Path(sample_dir)
     wavs = sorted(sample_dir.glob("*.wav"))
     if not wavs:
@@ -71,12 +86,13 @@ def evaluate_dir(sample_dir: Path, refs: list[tuple[str, str]],
     out: list[dict] = []
     for name, text in refs:
         slug = _slug(name)
-        match = next((w for w in wavs if w.stem.endswith(slug)), None)
+        # aceita tanto "00_ola-pt.wav" (samples) quanto "00_ola-pt_final.wav" (reference/)
+        match = next((w for w in wavs if slug in w.stem), None)
         if match is None:
             continue
-        segments, _ = model.transcribe(str(match), language="pt", beam_size=1)
+        segments, _ = model.transcribe(str(match), language="pt", beam_size=1, vad_filter=True)
         hyp = " ".join(s.text for s in segments).strip()
-        w, c = wer_cer(text, hyp)
+        w, c = wer_cer(text, hyp, do_norm)
         out.append({"name": name, "ref": text, "hyp": hyp,
                     "wer": round(w, 4), "cer": round(c, 4)})
     return out
@@ -90,15 +106,25 @@ def main() -> None:
     ap.add_argument("--size", default="large-v3")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--compute-type", default="int8")
+    ap.add_argument("--normalize", action="store_true",
+                    help="normaliza numeros/siglas (text_norm) em ref E hyp antes de medir")
+    ap.add_argument("--exclude", nargs="*", default=[],
+                    help="slugs a EXCLUIR da media (ex.: regressao-en) para isolar prosa pt-BR")
     args = ap.parse_args()
-    res = evaluate_dir(Path(args.dir), SAMPLE_TEXTS, args.size, args.device, args.compute_type)
+    res = evaluate_dir(Path(args.dir), SAMPLE_TEXTS, args.size, args.device,
+                       args.compute_type, args.normalize)
     for r in res:
         print(f"{r['name']:>16}  WER={r['wer']:.3f} CER={r['cer']:.3f}  hyp={r['hyp'][:80]}")
     if res:
         import numpy as np
 
-        print(f"MEDIA WER={np.mean([r['wer'] for r in res]):.4f} "
+        keep = [r for r in res if r["name"] not in set(args.exclude)]
+        print(f"MEDIA ({len(res)}) WER={np.mean([r['wer'] for r in res]):.4f} "
               f"CER={np.mean([r['cer'] for r in res]):.4f}")
+        if keep and len(keep) != len(res):
+            print(f"MEDIA sem {args.exclude} ({len(keep)}) "
+                  f"WER={np.mean([r['wer'] for r in keep]):.4f} "
+                  f"CER={np.mean([r['cer'] for r in keep]):.4f}")
 
 
 if __name__ == "__main__":
