@@ -1,6 +1,6 @@
 """FASE A - Analise somente-leitura do Breeze TTS 2 para planejamento LoRA.
 
-Roda na venv: C:/IA/Breeze-tts/breeze-tts/venv/Scripts/python.exe analyze_model.py
+Roda na venv: <ARTIFACTS>/breeze-tts/venv/Scripts/python.exe analyze_model.py
 - Introspeciona config.json do checkpoint.
 - Instancia o modelo em meta device (sem alocar pesos) e mapeia modulos/shapes.
 - Estima parametros treinaveis de LoRA para 3 variantes de target.

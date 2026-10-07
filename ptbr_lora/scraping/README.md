@@ -35,7 +35,7 @@ pilot_audit/playlist.txt   GATE: escute antes de escalar/usar
 
 ## Pré-requisitos
 
-1. Venv do projeto: `C:\IA\Breeze-tts\breeze-tts\venv\Scripts\python.exe`
+1. Venv do projeto: `<ARTIFACTS>\breeze-tts\venv\Scripts\python.exe`
 2. `.env` na raiz do projeto com:
    - `XAI_TRANSCRIBE_KEY` — chave da API de transcrição (https://console.x.ai)
    - `HF_TOKEN` — token HuggingFace com termos **aceitos** em:
@@ -46,7 +46,7 @@ pilot_audit/playlist.txt   GATE: escute antes de escalar/usar
 ## Uso
 
 ```powershell
-$py = "C:\IA\Breeze-tts\breeze-tts\venv\Scripts\python.exe"
+$py = "<ARTIFACTS>\breeze-tts\venv\Scripts\python.exe"
 # 1) coloque os .wav brutos em data\  (nomes ... [youtubeid].wav; tag = youtubeid)
 & $py 00_preprocess.py     # ~6 s/hora de áudio; resumível (pula 16k existente)
 & $py 01_diarize.py        # ~40 s/episódio em GPU; escreve work\diar\

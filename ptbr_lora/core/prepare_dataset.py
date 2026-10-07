@@ -2,16 +2,17 @@
 
 Subcomandos:
   process   [--limit N] [--device cuda]     parse+clean+resample+encode -> tokens/,wavs24/,meta
-  finalize  [--gold N] [--parity-device cuda]  splits 90/5/5 + gold dumps + paridade oficial
+  finalize  [--gold N] [--parity-device cuda]  splits por grupo 90/5/5 + gold dumps + paridade oficial
+(para so re-splitar sem GPU/torch: python ptbr_lora/tools/resplit.py)
 
 Resumivel: amostras com tokens/<idx>.npz existentes sao puladas no 'process'.
-Uso: C:/IA/Breeze-tts/breeze-tts/venv/Scripts/python.exe prepare_dataset.py process --limit 40
+Uso: <ARTIFACTS>/breeze-tts/venv/Scripts/python.exe prepare_dataset.py process --limit 40
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
+import functools
 import html
 import json
 import re
@@ -28,6 +29,10 @@ if str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))
 
 import common_breeze as CB
+import meta_io
+import refs as R
+import splits as SPL
+import text_norm
 CB.TRAINING.mkdir(parents=True, exist_ok=True)
 
 META_JSONL = CB.TRAINING / "dataset_meta.jsonl"
@@ -237,54 +242,18 @@ def truncate_pair(wav48, sr, text: str, cap_s: float):
 # ------------------------------------------------------------------ finalize
 
 
-def _apply_corpus_overrides(by_idx: dict[str, dict]) -> None:
-    """Aplica speakers.jsonl (locutor) e ref_map.jsonl (referencia por similaridade)
-    de cada corpus sobre os registros do meta."""
-    for corp in CB.load_corpora():
-        root = CB.corpus_dir(corp)
-        name = corp["name"]
-        spk_file = root / "speakers.jsonl"
-        if spk_file.exists():
-            for ln in spk_file.read_text(encoding="utf-8").splitlines():
-                if not ln.strip():
-                    continue
-                r = json.loads(ln)
-                t = by_idx.get(r["idx"])
-                if t is not None:
-                    t["speaker"] = r["speaker"]
-                    t.setdefault("corpus", name)
-        ref_file = root / "ref_map.jsonl"
-        if ref_file.exists():
-            for ln in ref_file.read_text(encoding="utf-8").splitlines():
-                if not ln.strip():
-                    continue
-                r = json.loads(ln)
-                t = by_idx.get(r["idx"])
-                if t is not None and r.get("ref_idx"):
-                    t["ref_idx"] = r["ref_idx"]
+# ------------------------------------------------------------------ meta / condicoes
+
+_META_CACHE: list[dict] | None = None
+_REC_BY_IDX: dict[str, dict] | None = None
 
 
 def load_meta() -> list[dict]:
+    """dataset_meta.jsonl + speakers.jsonl/ref_map.jsonl (leitura em `meta_io`, sem torch)."""
     global _META_CACHE
-    if _META_CACHE is not None:
-        return _META_CACHE
-    by_idx: dict[str, dict] = {}
-    for ln in META_JSONL.read_text(encoding="utf-8").splitlines():
-        if ln.strip():
-            r = json.loads(ln)
-            by_idx[r["idx"]] = r  # ultima ocorrencia vence (idempotente)
-    recs = list(by_idx.values())
-    spk = _chunk_speaker_map()
-    for r in recs:
-        if "speaker" not in r:
-            r["corpus"] = "podcast" if r["idx"] in spk else "tata"
-            r["speaker"] = spk.get(r["idx"], "tata")
-    _apply_corpus_overrides(by_idx)
-    _META_CACHE = recs
-    return recs
-
-
-_META_CACHE: list[dict] | None = None
+    if _META_CACHE is None:
+        _META_CACHE = meta_io.load_meta_records(META_JSONL)
+    return _META_CACHE
 
 
 def invalidate_meta_cache() -> None:
@@ -293,199 +262,117 @@ def invalidate_meta_cache() -> None:
     _REC_BY_IDX = None
 
 
-def _chunk_speaker_map() -> dict[str, str]:
-    """idx do podcast -> 'tag:SPEAKER_XX' (identidade NAO compartilha entre episodios)."""
-    global _SPK_MAP
-    if _SPK_MAP is not None:
-        return _SPK_MAP
-    m: dict[str, str] = {}
-    ci = CB.SCRAPING_WORK / "chunks_index.jsonl"
-    if ci.exists():
-        for ln in ci.read_text(encoding="utf-8").splitlines():
-            if ln.strip():
-                r = json.loads(ln)
-                m[r["chunk"].removesuffix(".wav")] = f"{r['tag']}:{r['speaker']}"
-    _SPK_MAP = m
-    return m
-
-
-_SPK_MAP: dict[str, str] | None = None
-
-
-REF_EDIT_FRAC = 1.0
-# Mistura CPM (VoiceStar): ~30% self-ref (prompt = o proprio clipe / continuacao)
-# + ~70% cross-ref (prompt = outro clipe do mesmo locutor). Ver docs/consistencia.
-SELF_REF_FRAC = 0.30
-
-
-def set_ref_edit_frac(frac: float) -> None:
-    """Fracao de exemplos em modo ref_edit (com referencia). 1.0 = todos."""
-    global REF_EDIT_FRAC
-    REF_EDIT_FRAC = min(1.0, max(0.0, float(frac)))
-
-
-def deterministic_variant(idx: str, rec: dict | None = None) -> str:
-    """ref_edit (com referencia) ou tts_instruction (sem), por hash do idx.
-    ref_edit_auto usa locutor (ref_map/pool); Tata e fallback ficam self-ref."""
-    h = hashlib.sha1(idx.encode()).digest()[0]
-    if (h / 256.0) >= REF_EDIT_FRAC:
-        return "tts_instruction"
-    if rec is not None and rec.get("speaker") and rec["speaker"] != "tata":
-        return "ref_edit_auto"
-    return "ref_edit_tata"
-
-
-def instruction_for_rec(rec: dict) -> str:
-    """Instrucao deterministica por amostra (mistura hash do idx + frames)."""
-    seed = (int(rec["frames"]) * 7 + sum(map(ord, rec["idx"]))) % 10_000
-    return CB.INSTRUCTION_POOL[seed % len(CB.INSTRUCTION_POOL)]
-
-
-_SPK_POOL: dict[str, list[str]] | None = None
-
-
-def _speaker_pool() -> dict[str, list[str]]:
-    """speaker -> idxs DO SPLIT DE TREINO (evita vazamento de val/test como ref)."""
-    global _SPK_POOL
-    if _SPK_POOL is not None:
-        return _SPK_POOL
-    train = set(load_split_file("train"))
-    pool: dict[str, list[str]] = {}
-    for r in load_meta():
-        if r["idx"] in train:
-            pool.setdefault(r.get("speaker", "tata"), []).append(r["idx"])
-    _SPK_POOL = pool
-    return _SPK_POOL
-
-
-def load_split_file(name: str) -> list[str]:
-    p = CB.TRAINING / f"splits_{name}.txt"
-    if not p.exists():
-        return []
-    return [l.strip() for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
-
-
 def _rec_by_idx() -> dict[str, dict]:
-    """Mapa idx->rec (evita busca linear O(N) por item ref_edit)."""
     global _REC_BY_IDX
     if _REC_BY_IDX is None:
         _REC_BY_IDX = {r["idx"]: r for r in load_meta()}
     return _REC_BY_IDX
 
 
-_REC_BY_IDX: dict[str, dict] | None = None
+def load_split_file(name: str) -> list[str]:
+    return SPL.load_split_file(CB.TRAINING, name)
 
 
-_CANONICAL_REFS: dict[str, str] | None = None
+# Mistura de condicoes do treino (ver refs.py). Default: 75 % ref_edit (cross-ref, com
+# instrucao) / 10 % ref_clone / 10 % tts_instruction / 5 % tts_plain — cobre TODOS os modos de
+# inferencia (a UI e o gerar_em_blocos usam ref; "sem referencia" existe na aba da UI).
+CONDITION_MIX: dict[str, float] = dict(R.DEFAULT_MIX)
+INSTRUCTION_MODE = "fixed"          # fixed | pool
+TEXT_NORMALIZE = True               # mesma normalizacao usada na inferencia (text_norm)
 
 
-def _canonical_refs() -> dict[str, str]:
-    """speaker -> idx de UMA referencia canonica (reusada em TODAS as linhas dele).
-
-    Preferencia: o clipe mais usado como `ref_idx` no ref_map (proxy barato de
-    medoid) entre os indices do split de treino. Sem ref_map (cml/cetuc/podcast),
-    escolhe um indice determinístico (menor sha1) do pool de treino do locutor.
-    """
-    global _CANONICAL_REFS
-    if _CANONICAL_REFS is not None:
-        return _CANONICAL_REFS
-    train = set(load_split_file("train"))
-    counts: dict[str, dict[str, int]] = {}
-    for r in load_meta():
-        ridx = r.get("ref_idx")
-        if ridx and r["idx"] in train and ridx in train and ridx != r["idx"]:
-            spk = r.get("speaker", "tata")
-            counts.setdefault(spk, {})
-            counts[spk][ridx] = counts[spk].get(ridx, 0) + 1
-    canon: dict[str, str] = {}
-    for spk, idxs in _speaker_pool().items():
-        if not idxs:
-            continue
-        c = counts.get(spk)
-        if c:
-            canon[spk] = max(c.items(), key=lambda kv: kv[1])[0]
-        else:
-            canon[spk] = min(idxs, key=lambda i: hashlib.sha1(i.encode()).hexdigest())
-    _CANONICAL_REFS = canon
-    return canon
+def set_condition_mix(mix) -> None:
+    global CONDITION_MIX
+    CONDITION_MIX = R.parse_mix(mix)
 
 
-def canonical_ref_rec(rec: dict) -> dict | None:
-    rid = _canonical_refs().get(rec.get("speaker", "tata"))
-    if rid and rid != rec["idx"]:
-        return _rec_by_idx().get(rid)
-    return None
+def set_ref_edit_frac(frac: float) -> None:
+    """Compat: --ref-edit-frac F => F ref_edit + (1-F) tts_instruction."""
+    set_condition_mix(R.mix_from_ref_edit_frac(frac))
 
 
-def pick_ref_rec(rec: dict) -> dict:
-    """Referencia do MESMO locutor.
-
-    1) referencia CANONICA do locutor (a mesma em todas as linhas dele);
-    2) ref_map (idx->ref_idx com guarda de similaridade);
-    3) pool por speaker + hash; 4) self-ref (fallback).
-    """
-    cr = canonical_ref_rec(rec)
-    if cr is not None:
-        return cr
-    ridx = rec.get("ref_idx")
-    if ridx and ridx != rec["idx"]:
-        rr = _rec_by_idx().get(ridx)
-        if rr is not None:
-            return rr
-    spk = rec.get("speaker", "tata")
-    pool = [i for i in _speaker_pool().get(spk, []) if i != rec["idx"]]
-    if not pool:
-        return rec
-    j = int(hashlib.sha1(("ref:" + rec["idx"]).encode()).hexdigest(), 16) % len(pool)
-    return _rec_by_idx().get(pool[j], rec)
+def set_instruction_mode(mode: str) -> None:
+    global INSTRUCTION_MODE
+    if mode not in ("fixed", "pool"):
+        raise ValueError(mode)
+    INSTRUCTION_MODE = mode
 
 
-def build_item(tokenizer, rec: dict, variant: str) -> dict[str, object]:
+def set_text_normalize(flag: bool) -> None:
+    global TEXT_NORMALIZE
+    TEXT_NORMALIZE = bool(flag)
+    _norm_text.cache_clear()
+
+
+def instruction_for_rec(rec: dict) -> str:
+    """Instrucao do item. `fixed` (default) = a MESMA da inferencia; `pool` = variada."""
+    if INSTRUCTION_MODE == "pool":
+        seed = (int(rec["frames"]) * 7 + sum(map(ord, rec["idx"]))) % 10_000
+        return CB.INSTRUCTION_POOL[seed % len(CB.INSTRUCTION_POOL)]
+    return CB.DEFAULT_INSTRUCTION
+
+
+@functools.lru_cache(maxsize=200_000)
+def _norm_text(t: str) -> str:
+    return text_norm.normalize(t) if TEXT_NORMALIZE else t
+
+
+def item_text(rec: dict) -> str:
+    return _norm_text(rec["text"])
+
+
+def build_item(tokenizer, rec: dict, variant: str, ref_rec: dict | None = None,
+               ref_codes_path=None) -> dict[str, object]:
     """Item pronto p/ DataLoader (tensores 1-D). Usa cache de codes.
 
-    ref_edit_auto: ref = OUTRO clipe do MESMO locutor (fallback self-ref se o
-    locutor so tem 1 clipe no treino). Template/policies = ref_edit_tata.
+    variant in R.REF_VARIANTS exige `ref_rec` (OUTRO clipe do mesmo locutor — quem escolhe e
+    `refs.resolve_condition`). Variantes sem referencia ignoram `ref_rec`.
+    `ref_codes_path`: tokens (.npz) de uma versao DEGRADADA da referencia (augmentation, ver
+    tools/augment_refs.py); troca so os codes do PROMPT — o alvo (supervisao) nunca e alterado.
     """
+    if variant == "ref_edit_auto":          # legado
+        variant = "ref_edit_tata"
+    if variant not in R.VARIANTS:
+        raise ValueError(f"variante desconhecida: {variant!r}")
     wav_key = str(CB.WAVS24_DIR / f"{rec['idx']}.wav")
     n_frames = CB.register_codes(wav_key, CB.TOKENS_DIR / f"{rec['idx']}.npz")
     instruction = instruction_for_rec(rec)
-    if variant == "ref_edit_auto":
-        # CPM (VoiceStar): ~30% self-ref (continuacao) + ~70% cross-ref
-        h_self = hashlib.sha1(("self:" + rec["idx"]).encode()).digest()[0] / 255.0
-        ref_rec = rec if h_self < SELF_REF_FRAC else pick_ref_rec(rec)
+    n_ref = 0
+    if variant in R.REF_VARIANTS:
+        if ref_rec is None:
+            raise ValueError(f"{variant} exige ref_rec")
         ref_key = str(CB.WAVS24_DIR / f"{ref_rec['idx']}.wav")
-        n_ref = CB.register_codes(ref_key, CB.TOKENS_DIR / f"{ref_rec['idx']}.npz")
+        n_ref = CB.register_codes(ref_key, ref_codes_path or CB.TOKENS_DIR / f"{ref_rec['idx']}.npz")
         req = CB.ExampleRequest(
-            variant="ref_edit_tata",
-            text=rec["text"],
-            instruction=instruction,
-            ref_text=ref_rec["text"],
-            ref_audio_path=ref_key,
-            target_audio_path=wav_key,
-        )
+            variant=variant, text=item_text(rec), instruction=instruction,
+            ref_text=item_text(ref_rec), ref_audio_path=ref_key, target_audio_path=wav_key)
     else:
-        n_ref = 0
         req = CB.ExampleRequest(
-            variant=variant,
-            text=rec["text"],
-            instruction=instruction,
-            ref_text=rec["text"],
-            ref_audio_path=wav_key,
-        )
+            variant=variant, text=item_text(rec), instruction=instruction,
+            ref_text="", ref_audio_path="", target_audio_path=wav_key)
     ex = CB.build_example(tokenizer, req)
     ex["labels"] = CB.make_labels(ex, frame_policies=CB.POLICIES_BY_VARIANT[variant])
-    # sanity estrutural
     assert len(ex["input_ids"][0]) == len(ex["labels"][0])
     n_audio_placeholders = int((ex["input_ids"][0] == CB.AUDIO_TOKEN_ID).sum())
-    if variant == "ref_edit_auto":
-        expected_frames = n_frames + n_ref
-    else:
-        expected_frames = n_frames * (2 if variant == "ref_edit_tata" else 1)
-    assert n_audio_placeholders == expected_frames, (n_audio_placeholders, expected_frames)
+    assert n_audio_placeholders == n_frames + n_ref, (n_audio_placeholders, n_frames, n_ref)
     ex["_n_frames"] = n_frames
+    ex["_n_ref_frames"] = n_ref
     ex["_variant"] = variant
     ex["_instruction"] = instruction
+    ex["_ref_idx"] = ref_rec["idx"] if ref_rec is not None and n_ref else None
+    ex["_ref_aug"] = bool(ref_codes_path) and bool(n_ref)
     return ex
+
+
+def do_split(write: bool) -> dict:
+    """Split por GRUPO (splits.py). `write=False` so calcula e audita."""
+    recs = load_meta()
+    new = SPL.make_splits(recs)
+    audit = SPL.audit_leaks(recs, new)
+    assert not audit["group_leaks"] and not audit["speaker_leaks"], audit
+    if write:
+        SPL.write_splits(new, CB.TRAINING)
+    return {"splits": new, "audit": audit, "stats": SPL.split_stats(recs, new)}
 
 
 def finalize(num_gold: int, parity_device: str) -> None:
@@ -495,46 +382,13 @@ def finalize(num_gold: int, parity_device: str) -> None:
     print(f"[finalize] registros={len(recs)}")
     assert len(recs) >= 100, "rode o 'process' completo antes do finalize"
 
-    # split ESTRATIFICADO POR CORPUS (train/val/test em cada fonte de dados)
-    # Split DISJUNTO POR LOCUTOR (nenhum locutor em treino E val/test), por corpus.
-    import random as _random
-
-    cuts: dict[str, list[str]] = {"train": [], "val": [], "test": []}
-    by_corpus: dict[str, dict[str, list[str]]] = {}
-    for r in recs:
-        cor = r.get("corpus", "tata")
-        by_corpus.setdefault(cor, {}).setdefault(r.get("speaker", r["idx"]), []).append(r["idx"])
-    rng = _random.Random(42)
-    for corpus, groups in by_corpus.items():
-        speakers = sorted(groups)
-        rng.shuffle(speakers)
-        total = sum(len(groups[s]) for s in speakers)
-        t_cut, v_cut = 0.90 * total, 0.95 * total
-        n_tr = n_va = 0
-        for s in speakers:
-            size = len(groups[s])
-            if n_tr < t_cut:
-                dest, n_tr = "train", n_tr + size
-            elif n_tr + n_va < v_cut:
-                dest, n_va = "val", n_va + size
-            else:
-                dest = "test"
-            cuts[dest].extend(groups[s])
-        print(f"[finalize] corpus '{corpus}': speakers={len(speakers)} total={total} "
-              f"train={n_tr} val={n_va} test={total - n_tr - n_va}")
-    for name, lst in cuts.items():
-        (CB.TRAINING / f"splits_{name}.txt").write_text("\n".join(lst), encoding="utf-8")
+    # Split por GRUPO (programa/episodio/locutor), estratificado por corpus (splits.py).
+    res = do_split(write=True)
+    cuts = res["splits"]
     print({k: len(v) for k, v in cuts.items()})
-
-    # Auditoria: nenhum locutor pode aparecer em dois splits (falha alto se houver).
-    spk_of = {r["idx"]: r.get("speaker", r["idx"]) for r in recs}
-    tr_spk = {spk_of[i] for i in cuts["train"]}
-    va_spk = {spk_of[i] for i in cuts["val"]}
-    te_spk = {spk_of[i] for i in cuts["test"]}
-    leaks = (tr_spk & va_spk) | (tr_spk & te_spk) | (va_spk & te_spk)
-    assert not leaks, f"vazamento de locutor entre splits: {sorted(leaks)[:5]}"
-    print(f"[finalize] split por locutor OK "
-          f"(train {len(tr_spk)} | val {len(va_spk)} | test {len(te_spk)})")
+    for name, st in res["stats"].items():
+        print(f"[finalize] {name}: {json.dumps(st, ensure_ascii=False)}")
+    print("[finalize] auditoria de vazamento OK (0 grupos / 0 locutores em >1 split)")
 
     tokenizer = CB.load_text_tokenizer()
 
@@ -552,15 +406,15 @@ def finalize(num_gold: int, parity_device: str) -> None:
     for gi, rec in enumerate(gold_recs):
         wav_key = str(CB.WAVS24_DIR / f"{rec['idx']}.wav")
         atok_official = CB.load_audio_tokenizer(parity_device)
-        for variant in ("tts_instruction", "ref_edit_tata"):
-            ex = build_item(tokenizer, rec, variant)
+        for variant in R.VARIANTS:
+            ex = build_item(tokenizer, rec, variant, ref_rec=rec)   # self-ref SO p/ paridade
             instruction = ex["_instruction"]
 
             # ---- paridade: (1) prefixo oficial puro; (2) bloco alvo isolado
 
             base_req = CB.ExampleRequest(
-                variant=variant, text=rec["text"], instruction=instruction,
-                ref_text=rec["text"], ref_audio_path=wav_key)
+                variant=variant, text=item_text(rec), instruction=instruction,
+                ref_text=item_text(rec), ref_audio_path=wav_key)
             prefix_official = _prepare_one(
                 tokenizer, atok_official, CB.ConfigStub(16),
                 CB.build_segments(base_req, include_target=False))
@@ -624,13 +478,12 @@ def finalize(num_gold: int, parity_device: str) -> None:
     SUMMARY.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print("[finalize]", json.dumps(summary, ensure_ascii=False))
 
-    manifest_lines = ["idx,corpus,speaker,wav_rel,text,dur_src_s,dur_proc_s,frames,variant"]
+    manifest_lines = ["idx,corpus,speaker,wav_rel,text,dur_src_s,dur_proc_s,frames"]
     for r in recs:
         safe = r["text"].replace('"', "'")
         manifest_lines.append(
             f"{r['idx']},{r.get('corpus','tata')},{r.get('speaker','tata')},{r['wav_rel']},"
-            f"\"{safe}\",{r['dur_src_s']},{r['dur_proc_s']},{r['frames']},"
-            f"{deterministic_variant(r['idx'], r)}"
+            f"\"{safe}\",{r['dur_src_s']},{r['dur_proc_s']},{r['frames']}"
         )
     MANIFEST_CSV.write_text("\n".join(manifest_lines), encoding="utf-8")
 

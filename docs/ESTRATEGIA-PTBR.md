@@ -1,9 +1,23 @@
 # Estratégia de treino PT-BR (v2) — receita, resultados e por que ela ganha consistência sem perder as sutilezas do português
 
-> **Status:** 25/09/2026 · **GPU:** RTX 4060 Ti 16 GB · **Melhor adaptador: `r72_01`**
+> **Documento histórico (protocolo v2).** O adaptador liberado é o **r76, passo 1500**, treinado e
+> avaliado com o protocolo v3 (ver `README.md` e `EVALUATION.md`); abaixo, o estado de 25/09/2026.
+>
+> **Status:** 25/09/2026 · **GPU:** RTX 4060 Ti 16 GB · **Melhor adaptador (na época): `r72_01`**
 > (`--targets all`, escala 4,0, LR 3e-5 com piso) — melhor voz **e** melhor português,
 > confirmado por audição e pela **métrica corrigida** (§3.4). Runs desta leva:
 > `r70_01` e `r71_01` (attn), `r72_01` (all, concluído em 25/09).
+>
+> **⚠️ Atualização 29/09/2026 — leia [`AUDITORIA-2026-09.md`](AUDITORIA-2026-09.md).**
+> A auditoria encontrou problemas no protocolo v2 que este documento descreve: split com
+> vazamento de programa/locutor (179 grupos), self-ref (~30 %) e referência "canônica" fixa
+> (que **não** era um medoid: era o `ref_idx` mais usado ou o menor sha1), buckets `:99` usados
+> como locutor, treino ≠ uso (só `ref_edit_tata`, texto/instrução diferentes da inferência) e
+> métricas viesadas (WER com VAD e sem normalização; SECS contra o próprio prompt). Os
+> **hiperparâmetros de LoRA** (§2.1–2.2, 2.5–2.6) continuam válidos; **§2.3–2.4 foram substituídos**
+> pelo protocolo v3 (`docs/TRAINING.md`: mix de condições, referência cross-ref sorteada por
+> época, sem self-ref, split por grupo). **Os números de val/WER/SECS abaixo são do protocolo
+> antigo** — trate-os como históricos e refaça a comparação com `eval_zero_shot.py`.
 >
 > Este documento é o resumo público da **v2 da receita**. O diagnóstico longo e a
 > pesquisa bibliográfica estão no material de trabalho (`CONSISTENCIA-DE-VOZ.md`,
@@ -217,7 +231,7 @@ identidade *relativo ao base*.
 
 ---
 
-## 5. Como reproduzir (receita v2)
+## 5. Como reproduzir (receita v2 — histórica; a v3 está em `docs/TRAINING.md`)
 
 ```bash
 # dados (referência canônica por locutor + identidade limpa)
@@ -247,19 +261,19 @@ python ptbr_lora/core/train_lora.py --run r72_01 --epochs 2 \
 
 ```bash
 # inteligibilidade — NOS CLIPES DE CLONAGEM, normalizado e sem os confusos (§3.4)
-python ptbr_lora/eval/eval_wer.py --dir <runs>/<run>/reference \
-  --normalize --exclude regressao-en siglas-pt --size large-v3 --device cpu
+python ptbr_lora/eval/eval_wer.py --dir <runs>/<run>/reference --size large-v3 --device cpu
+# (normalização é o default; `*-en` já sai da média pt)
 
 # identidade (SECS) — sempre com controle de outro locutor
 python ptbr_lora/eval/spk_similarity.py --dir <runs>/<run>/reference \
-  --refs ref.wav --rms-match --others outro_locutor.wav --exclude regressao-en
+  --refs ref.wav outra_gravacao.wav --prompt-ref ref.wav --rms-match --others outro_locutor.wav
 
 # gerar os clipes de clonagem do adapter (medoid de N: remove a variância da amostra)
 python ptbr_lora/tools/gerar_amostras_referencia.py --adapter <ckpt> \
   --out <runs>/<run>/reference --ref-audio ref.wav --device cuda --candidates 5
 ```
 
-Áudios de referência desta leva (locutor `VozEdnilson`), em `training/runs/<run>/reference/`:
+Áudios de referência desta leva (locutor `voz_autor`), em `training/runs/<run>/reference/`:
 
 - `r72_01/` — 11 `*_final.wav` (**melhor**) + 11 `*_step4500.wav`;
 - `r71_01/` — 11 `*_final.wav` + 11 `*_step4500.wav`;

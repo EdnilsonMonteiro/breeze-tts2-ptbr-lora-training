@@ -19,10 +19,11 @@ the official repository above.
 > non-commercial use only. See `NOTICE`; the model license is at
 > https://huggingface.co/BreezeBlue/Breeze-TTS-2/blob/main/LICENSE.
 
-> **Status — o modelo adaptador ainda NÃO foi publicado.** Este repositório
-> contém apenas o **código** de treino/avaliação. O LoRA **não** está disponível
-> aqui nem no Hugging Face; ele será liberado após treinos adicionais (mais runs).
-> A publicação atual é apenas o **registro do código**.
+> **Released adapter:** [`EdnilsonMonts/Breeze-tts-2-brazillian-lora`](https://huggingface.co/EdnilsonMonts/Breeze-tts-2-brazillian-lora)
+> (run *r76*, step 1500; same non-commercial licence as the base model). This repository
+> contains the **code** used to train and evaluate it; the weights and the training audio
+> are not stored here. Inference code and web UI:
+> [`EdnilsonMonteiro/breeze-tts2-ptbr`](https://github.com/EdnilsonMonteiro/breeze-tts2-ptbr).
 
 > **Upstream commit:** baseado em `008f769` do
 > [`breezeblue-ai/breeze-tts`](https://github.com/breezeblue-ai/breeze-tts)
@@ -39,18 +40,22 @@ Public, user-facing documentation lives in [`docs/`](docs/README.md):
 | [`docs/DATASETS.md`](docs/DATASETS.md) | corpora download, ingestion, `prepare_dataset.py` |
 | [`docs/TRAINING.md`](docs/TRAINING.md) | `train_lora.py`, `auto_train.py`, LoRA options |
 | [`docs/EVALUATION.md`](docs/EVALUATION.md) | val loss, WER/CER, speaker similarity |
-| [`docs/ESTRATEGIA-PTBR.md`](docs/ESTRATEGIA-PTBR.md) | **new recipe (v2)**: results, WER/SECS, why it improves consistency |
+| [`docs/ESTRATEGIA-PTBR.md`](docs/ESTRATEGIA-PTBR.md) | recipe v2: results, WER/SECS (historical numbers — old protocol) |
+| [`docs/AUDITORIA-2026-09.md`](docs/AUDITORIA-2026-09.md) | **audit 2026-09**: bugs found and protocol v3 |
+| [`docs/SPEAKER_PURITY.md`](docs/SPEAKER_PURITY.md) | speaker-label purity check (`speaker_purity.py`) before training |
 
 ## Layout
 
 ```
 ptbr_lora/
-├─ core/      paths.py, common_breeze.py, prepare_dataset.py, train_lora.py
+├─ core/      paths.py, common_breeze.py, prepare_dataset.py, train_lora.py,
+│             + pure modules (no torch): splits, refs, meta_io, asr_metrics, text_norm,
+│             text_blocks, adapter_scale, reference_prep, lr_schedule (tests in tests/ptbr)
 ├─ data/      corpus download/ingestion (HF), speaker clustering (ECAPA)
 ├─ scraping/  podcast pipeline (YouTube -> 24 kHz chunks + transcription)
 ├─ train/     auto_train.py (chained runs)
-├─ eval/      val_full, WER/CER, speaker similarity
-└─ tools/     model/corpus diagnostics
+├─ eval/      zero-shot (test split), val_full, WER/CER, speaker similarity
+└─ tools/     resplit, block-wise generation, reference prep, diagnostics
 docs/         public documentation (this repo)
 ```
 
@@ -72,7 +77,7 @@ Copy `.env.example` to `.env` and point `PTBR_ARTIFACTS` at the folder that hold
 `datasets/`, `training/` and `models/`:
 
 ```
-PTBR_ARTIFACTS=C:\IA\Breeze-tts
+PTBR_ARTIFACTS=/path/to/artifacts   # e.g. D:\breeze-artifacts on Windows
 ```
 
 The base checkpoint is **not** included. Download `BreezeBlue/Breeze-TTS-2` from
@@ -85,14 +90,18 @@ Hugging Face into `<PTBR_ARTIFACTS>/models/Breeze-TTS-2`.
 python ptbr_lora/core/prepare_dataset.py process
 python ptbr_lora/core/prepare_dataset.py finalize
 
-# 2) smoke test + training (receita v2; ver docs/ESTRATEGIA-PTBR.md)
+# 1b) group-level split without leakage (dry-run first; --write backs up the old one)
+python ptbr_lora/tools/resplit.py --write
+
+# 2) smoke test + training (protocol v3; see docs/TRAINING.md and docs/AUDITORIA-2026-09.md)
 python ptbr_lora/core/train_lora.py --run smoke --smoke --steps 30
-python ptbr_lora/core/train_lora.py --run r71_01 --epochs 2 \
-  --rank 64 --alpha 256 --targets attn --ref-edit-frac 1.0 \
+python ptbr_lora/core/train_lora.py --run r80_01 --epochs 2 \
+  --rank 64 --alpha 256 --targets all \
   --lr 3e-5 --lr-floor 0.15 --lr-cycles 3 --batch 2 --grad-acc 16
 
-# 3) evaluation
-python ptbr_lora/eval/eval_val_full.py --adapters <ckpt> --out results.json
+# 3) evaluation (zero-shot on unseen test speakers; base as control)
+python ptbr_lora/eval/eval_zero_shot.py --adapter "" --n 200 --out eval/base
+python ptbr_lora/eval/eval_zero_shot.py --adapter <ckpt> --n 200 --out eval/r80_01
 ```
 
 See [`docs/TRAINING.md`](docs/TRAINING.md) and [`docs/EVALUATION.md`](docs/EVALUATION.md).
@@ -111,23 +120,22 @@ The current recipe (**v2**, 20/09/2026) changed four things at once versus the
 first runs (`r64_*`): classic LoRA scale `α/r=4.0` instead of `rsLoRA` `α/√r=8.0`;
 an **LR floor** (15 %) with 3 cosine cycles so the LR never collapses to ~0;
 100 % reference-conditioned examples with a **canonical reference per speaker** and
-a cleaned identity signal (`REF_MIN_COS 0.70`, no self-ref); and `batch 2 × grad-acc
+a cleaned identity signal (`REF_MIN_COS 0.70`; the "no self-ref"/"canonical reference" claims were later found not to hold in the sampler — fixed in v3); and `batch 2 × grad-acc
 16` to avoid the OOM that killed v1.
 
-**Best adapter so far: `r72_01`** (`--targets all`). It is the best in Portuguese and
-the best voice by ear, and it wins the **corrected** metric too: measuring WER on the
-actual cloning clips (normalized, ASR-confound sentences excluded) gives **0.117**
-(`r72_01`) vs 0.147 (`r70_01`) and 0.167 (`r71_01`), against **0.908** for the frozen
-base. Two metric traps were found and fixed: the training WER was measured on
-reference-free samples (wrong task), and the **speaker-similarity (SECS) metric
-favours the base model** (it tracks channel/timbre, not pronunciation), so it must be
-read only relative to the base. Details, recipe and controls:
-[`docs/ESTRATEGIA-PTBR.md`](docs/ESTRATEGIA-PTBR.md) §3.2–§3.4.
+**Released adapter: r76, step 1500** (rank 64, alpha 128, attention + MLP, ~122 h / 1,608 voices,
+warm-started from an attention-only adapter). On a small automatic benchmark it reaches
+SECS 0.705 / WER 0.001 on 5 held-out voices (best-of-4: 0.747 / 0.000) and 0.631 / 0.005 on 3
+reference voices. These numbers are small-sample and come from one training seed; read the
+limits in the [model card](https://huggingface.co/EdnilsonMonts/Breeze-tts-2-brazillian-lora)
+and in [`docs/EVALUATION.md`](docs/EVALUATION.md).
 
-> Earlier caveat (superseded): in the v1 comparisons the reference-free and
-> reference-conditioned runs also differed in learning rate, so that effect was
-> reported as a joint data-and-optimizer intervention. The v2 runs isolate the
-> variables (only `--targets` differs between `r71_01` and `r72_01`).
+Lessons that shaped the pipeline (details in [`docs/AUDITORIA-2026-09.md`](docs/AUDITORIA-2026-09.md)
+and [`docs/ESTRATEGIA-PTBR.md`](docs/ESTRATEGIA-PTBR.md)): split by speaker/show group (no leakage),
+references always taken from *another* clip of the same speaker, WER measured on the real
+cloning task, and speaker similarity (SECS) read only relative to the base model, because it
+tracks channel/timbre more than pronunciation. The `v2` numbers in `ESTRATEGIA-PTBR.md` (run `r72_01`)
+are historical and come from the old, leaky protocol.
 
 ## License
 

@@ -17,29 +17,25 @@ for _p in (str(_CORE), str(_ROOT)):
         sys.path.insert(0, _p)
 import common_breeze as CB  # noqa: E402
 
-DEFAULT_ADAPTER = str(
-    Path(CB.TRAINING) / "runs" / "r64_03" / "checkpoints" / "step4000"
-)
+import adapter_scale as _AS  # noqa: E402
 
 
-def apply_adapter_scale(model, factor: float) -> int:
-    """Multiplica a escala TREINADA do adapter por `factor` (1.0 = como treinado).
+def _default_adapter() -> str:
+    """$PTBR_DEFAULT_ADAPTER; senao o `final` da run r72_01 (melhor adapter v2)."""
+    import os
 
-    Ex.: rsLoRA r=64 alpha=64 -> escala treinada 8.0; factor=0.5 -> 4.0 (atenuado).
-    Retorna o numero de modulos LoRA ajustados.
-    """
-    n = 0
-    for m in model.modules():
-        sc = getattr(m, "scaling", None)
-        if isinstance(sc, dict) and sc:
-            base = getattr(m, "_ptbr_base_scaling", None)
-            if base is None:
-                base = dict(sc)
-                m._ptbr_base_scaling = base
-            for k, v in base.items():
-                sc[k] = float(v) * float(factor)
-                n += 1
-    return n
+    env = os.environ.get("PTBR_DEFAULT_ADAPTER")
+    if env:
+        return env
+    return str(Path(CB.TRAINING) / "runs" / "r72_01" / "checkpoints" / "final")
+
+
+DEFAULT_ADAPTER = _default_adapter()
+
+
+def apply_adapter_scale(model, factor: float, adapter: str | None = None) -> int:
+    """Compat: implementacao unica em core/adapter_scale.py (base por chave, idempotente)."""
+    return _AS.apply_adapter_scale(model, factor, adapter)
 
 
 def load_model(adapter: str, device: str):

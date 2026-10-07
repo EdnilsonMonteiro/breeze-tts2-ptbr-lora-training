@@ -7,6 +7,10 @@ le o melhor val da rodada e so continua se melhorou >= --epsilon. Para sozinho e
   - arquivo de parada: crie  training\\AUTO_STOP  (o round em curso TERMINA antes)
   - exit code != 0 do treino (crash) -> aborta
 
+ATENCAO: o val e cross-ref por grupo (protocolo v3); o val_loss do checkpoint inicial (se
+veio de uma run com outro split) NAO e comparavel: rode `eval_val_full.py` no adapter inicial
+e use esse numero como baseline. `val` no nome da pasta = val_loss ponderado.
+
 Uso (depois do run base terminar):
   python auto_train.py --resume "training\\runs\\myrun\\checkpoints\\epoch1_valX_XXX"
 Opcoes: --max-rounds 6  --epochs 2  --lr 1e-4  --decay 0.5  --epsilon 0.002
@@ -60,12 +64,16 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--decay", type=float, default=0.5)
     ap.add_argument("--epsilon", type=float, default=0.002)
-    ap.add_argument("--rank", type=int, default=16)
-    ap.add_argument("--alpha", type=int, default=32)
-    ap.add_argument("--targets", choices=["attn", "all"], default="attn")
+    # rank/alpha/targets so valem se NAO houver adapter para retomar (aqui sempre ha: o
+    # --resume-adapter carrega a config do adapter); ficam por compatibilidade.
+    ap.add_argument("--rank", type=int, default=64)
+    ap.add_argument("--alpha", type=int, default=256)
+    ap.add_argument("--targets", choices=["attn", "all"], default="all")
     ap.add_argument("--use-rslora", action="store_true")
-    ap.add_argument("--ref-edit-frac", type=float, default=0.9)
-    ap.add_argument("--val-items", type=int, default=96)
+    ap.add_argument("--mix", type=str, default=None,
+                    help="mistura de condicoes (ver train_lora --mix); default = refs.DEFAULT_MIX")
+    ap.add_argument("--ref-edit-frac", type=float, default=None, help="LEGADO (ver train_lora)")
+    ap.add_argument("--val-items", type=int, default=320)
     ap.add_argument("--corpus-weights", type=str, default=None)
     ap.add_argument("--no-wer", action="store_true")
     args = ap.parse_args()
@@ -89,8 +97,11 @@ def main() -> None:
         cmd = [str(PY), str(TRAIN_PY), "--run", run, "--epochs", str(args.epochs),
                "--lr", f"{lr:g}", "--rank", str(args.rank), "--alpha", str(args.alpha),
                "--targets", args.targets, "--val-items", str(args.val_items),
-               "--ref-edit-frac", f"{args.ref_edit_frac:g}",
                "--resume-adapter", str(best_ckpt)]
+        if args.mix:
+            cmd += ["--mix", args.mix]
+        elif args.ref_edit_frac is not None:
+            cmd += ["--ref-edit-frac", f"{args.ref_edit_frac:g}"]
         if args.use_rslora:
             cmd.append("--use-rslora")
         if args.corpus_weights:

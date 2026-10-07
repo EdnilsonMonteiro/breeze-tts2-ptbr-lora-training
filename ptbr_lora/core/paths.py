@@ -4,7 +4,7 @@ Regra: o CODIGO vive neste repo (o fork do engine + `ptbr_lora/`), mas os
 ARTEFATOS (datasets/, training/, models/) ficam FORA do repositorio git.
 
 Configure a raiz dos artefatos de uma das formas:
-  - variavel de ambiente  PTBR_ARTIFACTS=C:\\IA\\Breeze-tts
+  - variavel de ambiente  PTBR_ARTIFACTS=/path/to/artifacts
   - arquivo .env na raiz do repo (mesmo formato KEY=VALUE; ver .env.example)
 
 Variaveis aceitas (todas opcionais; ha default repo-local):

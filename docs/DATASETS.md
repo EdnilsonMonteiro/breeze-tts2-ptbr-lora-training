@@ -46,6 +46,15 @@ mono + transcrição (`00_preprocess` → `01_diarize` → `02_slice` → `03_tr
 → `04_qc_audit`). Requer `XAI_TRANSCRIBE_KEY` e `HF_TOKEN` no `.env`. Detalhes no
 cabeçalho de cada script e no `scraping/README.md`.
 
+**Identidade dos locutores (obrigatório antes de treinar com podcast):** a diarização dá rótulos por episódio (`SPEAKER_00` de um episódio não tem relação com o de outro) e erra nas bordas e em fala sobreposta. `python ptbr_lora/data/podcast_identity.py` (GPU, ~5–10 min) corrige isso com embeddings de voz:
+
+1. descarta clipes cuja margem invade fala de outro locutor (RTTM) e clipes com troca de voz no meio (1ª × 2ª metade);
+2. limpa cada rótulo (tira intrusos; rótulo com 2 vozes vira `#a`/`#b`);
+3. liga a **mesma pessoa em episódios diferentes** num id global `podcast:P###` (ligação completa, limiar calibrado em pares sabidamente diferentes do CETUC);
+4. episódios que compartilham alguém viram um grupo (`G###`): a mesma pessoa nunca fica em treino e validação.
+
+Saída no padrão dos outros corpora: `datasets/podcast/speakers.jsonl` (`idx`, `speaker`, `group`; descartados = `podcast:99`) e `datasets/podcast/identity/` (`report.html` para ouvir as decisões, `chunks.csv`, `speakers.csv`, `summary.json`). Use `--dry-run` para só gerar o relatório.
+
 ## 3. Preparação para o treino
 
 Dois comandos (o `process` é resumível — pula `.npz` existentes):
@@ -58,9 +67,15 @@ python ptbr_lora/core/prepare_dataset.py finalize [--gold N] [--parity-device cu
 - **process**: lê os `texts.csv` dos corpora ativos, reamostra para 24 kHz,
   codifica o áudio uma única vez (`Qwen3TTSTokenizer`) e salva
   `training/tokens/<idx>.npz`; gera `wavs24/`.
-- **finalize**: split estratificado **90/5/5 por corpus** (`splits_{train,val,test}.txt`),
-  `dataset_meta.jsonl`, `manifest.csv`, `summary.json`, amostras *gold* e a
-  verificação de paridade com o template oficial.
+- **finalize**: split **90/5/5 por corpus e por GRUPO** (`splits_{train,val,test}.txt`; grupo =
+  programa/episódio no tagarela e no podcast, locutor nos demais — `core/splits.py`, seed 42, com
+  auditoria de vazamento), `manifest.csv`, `summary.json`, amostras *gold* e a verificação de
+  paridade com o template oficial (4 variantes).
+- **só re-splitar** (sem GPU/torch): `python ptbr_lora/tools/resplit.py` (dry-run) e `--write`
+  (faz backup do split atual em `training/splits_backup_<data>/`). Escreve também `splits_meta.json`.
+
+Locutores terminados em `:99` são buckets de locutores dissolvidos/não atribuídos: não servem de
+referência e treinam só sem referência.
 
 ## Formato do `texts.csv`
 
@@ -72,7 +87,12 @@ wavs/podcast_000123.wav==A previsão do tempo indica pancadas de chuva à tarde.
 ```
 
 O parser aceita esse formato direto; `speakers.jsonl` (opcional) acrescenta
-`{"idx","speaker"}` e `ref_map.jsonl` `{"idx","ref_idx","cos"}`.
+`{"idx","speaker"}`; `ref_map.jsonl` (`{"idx","ref_idx","cos"}`) é **legado** — o treino v3 não o usa (a
+referência é sorteada por época entre os clipes do mesmo locutor).
+
+## Conferir a pureza de locutor
+
+Antes de treinar, confira se os clipes de cada locutor são mesmo a mesma pessoa (diarização errada, convidado no microfone do apresentador, vinhetas): `python ptbr_lora/tools/speaker_purity.py --folders <pasta> --out <saida>` (ou `--manifest` / `--training-dir`). Gera um `report.html` com exemplos para ouvir. Detalhes em [SPEAKER_PURITY.md](SPEAKER_PURITY.md).
 
 ## Próximo passo
 

@@ -17,6 +17,7 @@ import numpy as np
 _CORE = Path(__file__).resolve().parents[1] / "core"
 if str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))
+import asr_metrics as AM  # noqa: E402
 import paths  # noqa: E402
 
 _ECAPA = None
@@ -103,39 +104,21 @@ def load_asr(size: str = "large-v3", device: str = "cpu", compute_type: str = "i
 
 
 def transcribe(path, size: str = "large-v3", device: str = "cpu",
-               compute_type: str = "int8") -> str:
+               compute_type: str = "int8", lang: str = "pt") -> str:
+    """Sem VAD e sem condition_on_previous_text: o VAD cortava cauda/arrasto e escondia falhas."""
     model = load_asr(size, device, compute_type)
-    segs, _ = model.transcribe(str(path), language="pt", beam_size=1, vad_filter=True)
+    segs, _ = model.transcribe(str(path), language=lang, beam_size=5, vad_filter=False,
+                               condition_on_previous_text=False)
     return " ".join(s.text for s in segs).strip()
 
 
-def _lev(a: list, b: list) -> int:
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        cur = [i]
-        for j, cb in enumerate(b, 1):
-            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
-        prev = cur
-    return prev[-1]
-
-
 def _norm(s: str) -> str:
-    import re
-    import unicodedata
-
-    s = unicodedata.normalize("NFC", s or "").lower()
-    s = re.sub(r"[^\wáàâãéèêíïóôõöúçñ\s]", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
+    return AM.normalize_for_wer(s, "pt", True)
 
 
-def wer_cer(ref: str, hyp: str) -> tuple[float, float]:
-    r, h = _norm(ref), _norm(hyp)
-    rw, hw = r.split(), h.split()
-    wer = _lev(rw, hw) / max(1, len(rw))
-    cer = _lev(list(r.replace(" ", "")), list(h.replace(" ", ""))) / max(
-        1, len(r.replace(" ", ""))
-    )
-    return wer, cer
+def wer_cer(ref: str, hyp: str, lang: str = "pt", normalize: bool = True) -> tuple[float, float]:
+    """WER/CER com normalizacao (text_norm) nos DOIS lados — implementacao unica em asr_metrics."""
+    return AM.wer_cer(ref, hyp, lang=lang, normalize=normalize)
 
 
 def word_hits(ref: str, hyp: str, words: list[str]) -> dict[str, bool]:

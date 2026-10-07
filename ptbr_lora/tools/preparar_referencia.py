@@ -6,8 +6,8 @@ silêncio e normalizadas — então mandar para a inferência o arquivo cru (18 
 com silêncios) é extrapolação de formato e janela. Este script normaliza e corta exatamente
 como a Fase B do treino e escolhe a referência mais "típica" do locutor.
 
-  1. Normaliza a(s) gravação(ões) como na Fase B do treino
-     (mono -> 24 kHz -> trim top_db=40 -> peak-norm p/ 0.95 -> clip).
+  1. Normaliza a(s) gravação(ões) como no TREINO (mono -> 24 kHz -> trim top_db=40 -> peak-norm p/ 0.95 -> clip).
+     (--sr 48000 reproduz o formato antigo da UI; o default agora é o que o adapter viu.)
   2. Fatia em candidatos de 4-10 s (cortes em silêncio), juntando trechos curtos.
   3. Escolhe o **medoid** (candidato com maior cos médio ECAPA contra os demais):
      a referência mais "típica" do locutor, que maximiza a similaridade esperada
@@ -20,16 +20,16 @@ como a Fase B do treino e escolhe a referência mais "típica" do locutor.
 
 Uso:
   # uma gravação longa (corta automaticamente)
-  python preparar_referencia.py --src VozEdnilson.wav --name VozEdnilsonA \
-      --workspace "C:/IA/Breeze-tts/voices" --transcribe
+  python preparar_referencia.py --src voz_autor.wav --name voz_autorA \
+      --workspace "<PTBR_ARTIFACTS>/voices" --transcribe
 
   # várias gravações do mesmo locutor (escolhe o medoid entre elas)
-  python preparar_referencia.py --src "C:/voz/*.wav" --name VozEdnilsonA \
-      --workspace "C:/IA/Breeze-tts/voices" --no-slice
+  python preparar_referencia.py --src "C:/voz/*.wav" --name voz_autorA \
+      --workspace "<PTBR_ARTIFACTS>/voices" --no-slice
 
   # valida o texto da referência
-  python preparar_referencia.py --src VozEdnilson.wav --name Check \
-      --workspace "C:/tmp/vozes" --ref-text-file ref_VozEdnilson.txt --transcribe
+  python preparar_referencia.py --src voz_autor.wav --name Check \
+      --workspace "C:/tmp/vozes" --ref-text-file ref_voz_autor.txt --transcribe
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ import soundfile as sf  # noqa: E402
 
 import metrics  # noqa: E402
 
-SR = 24_000
+SR = 24_000  # = formato do treino (corpus a 24 kHz). --sr 48000 = legado (UI antiga).
 MIN_CAND_S = 4.0
 MAX_CAND_S = 10.0
 PEAK_NORM = 0.95
@@ -56,7 +56,7 @@ PEAK_NORM = 0.95
 
 # ------------------------------------------------------------------ audio
 def normalize(path: Path) -> np.ndarray:
-    """mono -> 24 kHz -> trim -> peak-norm (igual a prepare_dataset.process)."""
+    """mono -> SR (24 kHz) -> trim -> peak-norm (formato do treino)."""
     import librosa
 
     wav, sr = sf.read(str(path), dtype="float32", always_2d=True)
@@ -116,6 +116,8 @@ def main() -> None:
     ap.add_argument("--ref-text-file", default=None)
     ap.add_argument("--transcribe", action="store_true", help="ASR do corte escolhido")
     ap.add_argument("--no-slice", action="store_true", help="nao fatiar (trata cada --src como 1 candidato)")
+    ap.add_argument("--sr", type=int, default=24_000, choices=[24_000, 48_000],
+                    help="taxa da ref.wav (24000 = como no treino; 48000 = legado)")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
@@ -134,6 +136,8 @@ def main() -> None:
     if not srcs:
         raise SystemExit(f"[enroll] nenhum audio em --src {a.src!r}")
 
+    global SR
+    SR = int(a.sr)
     ws = Path(a.workspace) if a.workspace else HERE.parent.parent / "voices"
     outdir = ws / a.name
     if outdir.exists() and not a.force:

@@ -10,7 +10,7 @@ arquivo `.env` na raiz do repo).
 Copie `.env.example` para `.env` e edite:
 
 ```ini
-PTBR_ARTIFACTS=C:\IA\Breeze-tts
+PTBR_ARTIFACTS=/path/to/artifacts
 ```
 
 `PTBR_ARTIFACTS` é a raiz que contém `datasets/`, `training/` e `models/`.

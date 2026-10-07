@@ -48,3 +48,11 @@ cookies.txt
 # Testes locais de voz (nada em teste_voz entra no repositorio)
 ptbr_lora/teste_voz/
 
+
+# Audio (defesa extra)
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.opus
+.local/

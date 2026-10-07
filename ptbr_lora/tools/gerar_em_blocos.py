@@ -17,17 +17,18 @@ Protocolo por bloco:
   4. iguala o RMS dos blocos e concatena com pausas.
 
 Uso:
-  python gerar_em_blocos.py --voice VozEdnilsonA \
-      --workspace "C:/IA/Breeze-tts/voices" \
-      --adapter "C:/IA/Breeze-tts/training/runs/r64_03/checkpoints/step4000" \
-      --text-file meu_texto.txt --candidates 8 --out "C:/IA/Breeze-tts/training/ui_out/exp1"
+  python gerar_em_blocos.py --voice voz_autorA \
+      --adapter "<PTBR_ARTIFACTS>/training/runs/<run>/checkpoints/final" \
+      --text-file meu_texto.txt --candidates 8 --out "<PTBR_ARTIFACTS>/training/ui_out/exp1"
+  (--workspace default = <PTBR_ARTIFACTS>/voices; --adapter default = $PTBR_DEFAULT_ADAPTER)
 
   # blocos menores (mais fidelidade, mais tempo de GPU):
   --max-block-s 8
 
-  # clone puro (só identidade) vs voice direction (com instrução):
-  --template ref_clone_tata           (default; cai p/ ref_edit_tata se o engine não tiver)
-  --template ref_edit_tata --cfg-scale 4.0
+  # template: ref_edit_tata (DEFAULT, condicao mais treinada: 75 % do mix) ou ref_clone_tata
+  # (clone puro, 10 % do mix; o CFG negativo/dual do ref_edit usa ref_clone):
+  --template ref_edit_tata            (default)
+  --template ref_clone_tata           (sem instrucao; cfg_scale forcado a 1.0)
   --use-dual-cfg --cfg-ref 1.2
 """
 from __future__ import annotations
@@ -35,7 +36,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import re
 import sys
 import time
 from pathlib import Path
@@ -51,84 +51,23 @@ import metrics  # noqa: E402
 import gen_core  # noqa: E402
 import text_norm  # noqa: E402
 
-DEFAULT_WORKSPACE = Path(r"C:\IA\Breeze-tts\voices")
+import adapter_scale as AS  # noqa: E402
+import asr_metrics as AM  # noqa: E402
+import paths  # noqa: E402
+import reference_prep as RP  # noqa: E402
+import text_blocks as TB  # noqa: E402
+
+DEFAULT_WORKSPACE = paths.ARTIFACTS / "voices"
 SR = 24_000
 
 
 # ------------------------------------------------------------------ texto
-def split_blocks(text: str, max_words: int, min_words: int = 5) -> list[str]:
-    """Quebra o texto em blocos de <= max_words palavras, cortando em pontuacao forte.
-
-    Tolerancia: uma frase ate ~15 % acima do orcamento fica inteira (evita cortes
-    artificiais no meio de uma frase por 1-2 palavras). Blocos muito curtos
-    (< min_words) sao grudados no vizinho -- blocos de 1-2 palavras geram audio de
-    ~1,5 s, que e ruim para estabilidade e para a medicao de identidade.
-    """
-    sents = [s.strip() for s in re.split(r"(?<=[.!?;:])\s+", text.strip()) if s.strip()]
-    soft = max(max_words, int(round(max_words * 1.15)))
-    blocks: list[str] = []
-    cur: list[str] = []
-    n = 0
-    for s in sents:
-        w = len(s.split())
-        if cur and n + w > soft:
-            blocks.append(" ".join(cur))
-            cur, n = [], 0
-        if w > soft:                           # frase gigante: fatia por virgula e, se
-            parts = [p.strip() for p in s.split(",") if p.strip()]   # ainda faltar, por palavras
-            chunks: list[str] = []
-            for pi, p in enumerate(parts):
-                suffix = "," if pi < len(parts) - 1 else ""
-                pw = p.split()
-                if len(pw) <= max_words:
-                    chunks.append(p + suffix)
-                    continue
-                for i in range(0, len(pw), max_words):
-                    is_last = i + max_words >= len(pw)
-                    chunks.append(" ".join(pw[i:i + max_words]) + (suffix if is_last else ""))
-            for ch in chunks:
-                cw = len(ch.split())
-                if cur and n + cw > soft:
-                    blocks.append(" ".join(cur))
-                    cur, n = [], 0
-                cur.append(ch)
-                n += cw
-            continue
-        cur.append(s)
-        n += w
-    if cur:
-        blocks.append(" ".join(cur))
-
-    # junta blocos curtos no vizinho (curto no inicio -> proximo; no fim -> anterior)
-    out: list[str] = []
-    i = 0
-    while i < len(blocks):
-        b = blocks[i]
-        if len(b.split()) < min_words and i + 1 < len(blocks):
-            blocks[i + 1] = b + " " + blocks[i + 1]
-            i += 1
-            continue
-        out.append(b)
-        i += 1
-    if len(out) > 1 and len(out[-1].split()) < min_words:
-        out[-2] = out[-2] + " " + out[-1]
-        out.pop()
-    return out
+# (split_blocks / dur_ok vivem em core/text_blocks.py, compartilhados com a UI)
+split_blocks = TB.split_blocks
+dur_ok = TB.dur_ok
 
 
 # ------------------------------------------------------------------ audio
-def dur_ok(dur: float, words: int, lo: float = 0.55, hi: float = 2.2,
-           wps: float = 2.6) -> bool:
-    """A duracao gerada e plausivel para o texto? (wps ~ 155 palavras/min)
-
-    O gate relativo (dur vs mediana dos candidatos) nao pega o caso de TODOS os
-    candidatos serem longos -- e nesse modelo um texto curto pode virar 13 s de fala
-    arrastada. Este gate ancora a duracao no TEXTO, nao nos vizinhos.
-    """
-    exp_s = max(2.0, words / max(wps, 0.1))
-    return lo * exp_s <= dur <= hi * exp_s
-
-
 def rms_match(wav: np.ndarray, target_rms: float, max_gain: float = 4.0) -> np.ndarray:
     cur = float(np.sqrt(np.mean(wav ** 2))) if len(wav) else 0.0
     if cur < 1e-6:
@@ -173,7 +112,7 @@ def main() -> None:
     ap.add_argument("--text", default=None)
     ap.add_argument("--text-file", default=None)
     ap.add_argument("--instruction", default="Fale com clareza e naturalidade.")
-    ap.add_argument("--template", default="ref_clone_tata",
+    ap.add_argument("--template", default="ref_edit_tata",
                     choices=["ref_clone_tata", "ref_edit_tata", "tts_instruction"])
     ap.add_argument("--candidates", type=int, default=8)
     ap.add_argument("--seed-base", type=int, default=1)
@@ -247,18 +186,11 @@ def main() -> None:
                template=template, instruction=a.instruction, max_new_tokens=400)
 
     refs_clean: list[Path] = []
-    import librosa
-    for r in refs:                                   # referencias normalizadas (mono 24k/trim/norm)
-        w, sr = sf.read(str(r), dtype="float32", always_2d=True)
-        w = w.mean(axis=1)
-        if sr != SR:
-            w = librosa.resample(w, orig_sr=sr, target_sr=SR)
-        w, _ = librosa.effects.trim(w, top_db=40)
-        pk = float(np.max(np.abs(w))) if len(w) else 0.0
-        if pk < 0.30 or pk > 0.99:
-            w = w * (0.95 / max(pk, 1e-9))
-        p = out / f"_ref_{r.stem}.wav"
-        sf.write(str(p), np.clip(w, -1, 1), SR, subtype="PCM_16")
+    for r in refs:                                   # formato do TREINO: mono 24 kHz, trim, peak-norm
+        p, dur_r = RP.prepare_reference(r, out / "_refs", "train")
+        warn = RP.duration_warning(dur_r)
+        if warn:
+            print(f"[gen] (aviso) {r.name}: {warn}")
         refs_clean.append(p)
     ref_emb = [metrics.embed(str(p), "cpu") for p in refs_clean]
     print("[gen] ref_wav normalizada: "
@@ -266,7 +198,7 @@ def main() -> None:
 
     model, tok, atok = gen_core.load_model(a.adapter, a.device)
     if a.adapter_scale != 1.0:
-        n_sc = gen_core.apply_adapter_scale(model, a.adapter_scale)
+        n_sc = AS.apply_adapter_scale(model, a.adapter_scale)
         print(f"[gen] escala do adapter = {a.adapter_scale} aplicada em {n_sc} modulos LoRA")
     cfg = {**cfg, "adapter_scale": a.adapter_scale}
     rows: list[dict] = []
@@ -288,14 +220,14 @@ def main() -> None:
                                                  refs_clean[0], rtxt, btext, a.device)
                 sf.write(str(wav_p), np.clip(wav, -1, 1), sr, subtype="PCM_16")
             e = metrics.embed(str(wav_p), "cpu")
-            cos_ref = float(np.mean([metrics.cos(e, re) for re in ref_emb]))
+            cos_ref = float(np.mean([metrics.cos(e, rv) for rv in ref_emb]))
             cf, cl, drift = metrics.temporal_cos(str(wav_p), ref_emb[0], "cpu")
             dur = sf.info(str(wav_p)).frames / SR
             hyp, wer = "", float("nan")
             if not a.no_asr:
                 try:
                     hyp = metrics.transcribe(str(wav_p), device="cpu")
-                    wer, _ = metrics.wer_cer(btext, hyp)
+                    wer, _ = AM.wer_cer(btext, hyp)
                 except Exception as exc:  # noqa: BLE001
                     print(f"      (aviso) ASR falhou: {type(exc).__name__}")
             r = {"bloco": bi, "seed": seed, "wav": str(wav_p), "cos_ref_multi": round(cos_ref, 4),

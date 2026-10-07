@@ -1,16 +1,16 @@
 """gerar_amostras_referencia.py — faz a VOZ DE REFERENCIA falar as frases de avaliacao.
 
-Usa o template ref_edit_tata (clone + instrucao) com a referencia `VozEdnilson` e
+Usa o template ref_edit_tata (clone + instrucao) com a referencia `voz_autor` e
 gera, para cada frase de SAMPLE_TEXTS, um WAV. Serve como "baseline de referencia"
 para comparar com as amostras dos checkpoints (rodando com --adapter vazio = base,
 ou com um checkpoint = adapter).
 
 Uso:
   python ptbr_lora/tools/gerar_amostras_referencia.py \
-    --ref-audio "C:\\IA\\Breeze-tts\\voices\\VozEdnilson.wav" \
-    --out "C:\\IA\\Breeze-tts\\training\\runs\\r70_01\\reference"
+    --ref-audio "<ARTIFACTS>\\voices\\voz_autor.wav" \
+    --out "<ARTIFACTS>\\training\\runs\\r72_01\\reference"
 
-Sem --adapter, escolhe o checkpoint mais recente de runs/r70_01/checkpoints; se nao
+Sem --adapter, escolhe o checkpoint mais recente de runs/r72_01/checkpoints; se nao
 houver, usa o modelo BASE (--adapter "").
 """
 from __future__ import annotations
@@ -34,20 +34,8 @@ import common_breeze as CB  # noqa: E402
 import gen_core  # noqa: E402
 import text_norm  # noqa: E402
 
-SAMPLE_TEXTS = [
-    ("ola-pt", "Olá! Este é um teste de voz em português brasileiro."),
-    ("numeros-pt", "O número da minha casa é quinze oh dois, no bairro Jardim Europa."),
-    ("clima-pt", "A previsão do tempo indica pancadas de chuva à tarde, com temperaturas "
-                 "entre dezesseis e vinte e três graus."),
-    ("siglas-pt", "Atenção: CPF um dois três ponto quatro cinco seis ponto sete oito nove, traço zero um."),
-    ("afetivo-pt", "Que saudade daquele café quentinho da vovó no fim da tarde!"),
-    ("regressao-en", "The weather today is sunny with a gentle breeze from the east."),
-    ("placa-pt", "O carro de placa ABC um D vinte e três foi apreendido ontem à noite."),
-    ("letras-pt", "As vogais são A, E, I, O, U; e as consoantes seguem o alfabeto."),
-    ("siglas2-pt", "O IBGE e o INSS divulgaram os números na quinta-feira passada."),
-    ("oov-pt", "O buzinaço assustou o gatíneo enquanto ele papeava na varanda."),
-    ("trabalenguas-pt", "O rato roeu a roupa do rei de Roma e o mundo se admirou."),
-]
+from sample_texts import SAMPLE_TEXTS  # noqa: E402  (fonte unica, com o treino)
+import reference_prep as RP  # noqa: E402
 
 
 def _latest_checkpoint(run: str) -> str:
@@ -57,6 +45,10 @@ def _latest_checkpoint(run: str) -> str:
     cks = [p for p in d.iterdir() if p.is_dir() and (p / "adapter_config.json").is_file()]
     if not cks:
         return ""
+    for pref in ("final", "best"):                     # prefere o final/best ao mais recente
+        for p in cks:
+            if p.name == pref:
+                return str(p)
     return str(max(cks, key=lambda p: p.stat().st_mtime))
 
 
@@ -77,10 +69,10 @@ def _ref_text_from_voices(ref_audio: Path) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Gera as frases de referencia com a voz clone.")
     ap.add_argument("--ref-audio",
-                    default=str(CB.ARTIFACTS / "voices" / "VozEdnilson" / "ref.wav"))
+                    default=str(CB.ARTIFACTS / "voices" / "voz_autor" / "ref.wav"))
     ap.add_argument("--ref-text", default=None)
     ap.add_argument("--adapter", default=None, help="pasta do adapter; '' = base; default = checkpoint mais recente")
-    ap.add_argument("--run", default="r70_01", help="run usado para achar o checkpoint padrao")
+    ap.add_argument("--run", default="r72_01", help="run usado para achar o checkpoint padrao")
     ap.add_argument("--out", default=None)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--temperature", type=float, default=0.7)
@@ -112,7 +104,9 @@ def main() -> None:
     except Exception:  # noqa: BLE001
         pass
 
-    print(f"[ref] referencia={ref}")
+    ref, _dur = RP.prepare_reference(ref, out / "_ref", "train")   # formato do treino
+    ref_text = text_norm.normalize(ref_text)
+    print(f"[ref] referencia={ref} ({_dur:.1f}s)")
     print(f"[ref] adapter={adapter or '(base)'}  device={args.device}  out={out}")
 
     model, tok, atok = gen_core.load_model(adapter, args.device)
@@ -120,7 +114,7 @@ def main() -> None:
         "template": "ref_edit_tata", "instruction": args.instruction,
         "cfg_scale": 1.0, "use_dual_cfg": False, "cfg_ref": 1.0, "cfg_ins": 1.0,
         "temperature": args.temperature, "top_k": 50, "top_p": 1.0,
-        "max_new_tokens": 1200, "speaker": "S0",
+        "max_new_tokens": 400, "speaker": "S0",
     }
     n_cand = max(1, int(args.candidates))
     cand_dir = out / "_candidates"

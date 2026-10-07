@@ -42,8 +42,8 @@ O engine e importado da raiz do fork (`paths.BREEZE_REPO`).
 
 ```powershell
 $py = "<caminho-do-venv>\Scripts\python.exe"
-$env:PTBR_ARTIFACTS = "C:\IA\Breeze-tts"   # ou defina no .env da raiz
+$env:PTBR_ARTIFACTS = "/path/to/artifacts"   # ou defina no .env da raiz
 ```
 
-Os caminhos absolutos antigos (`C:\IA\Breeze-tts\...`) foram removidos; ajuste
+Os caminhos absolutos antigos (`<ARTIFACTS>\...`) foram removidos; ajuste
 apenas `PTBR_ARTIFACTS`. Detalhes em `../docs/CONFIGURATION.md`.

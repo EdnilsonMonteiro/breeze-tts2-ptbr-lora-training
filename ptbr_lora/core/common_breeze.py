@@ -102,28 +102,8 @@ DATASETS_ROOT = paths.DATASETS_ROOT
 CORPORA_JSON = paths.CORPORA_JSON
 SCRAPING_WORK = paths.SCRAPING_WORK
 
-_LEGACY_CORPORA = [
-    {"name": "tata", "root": "TTS-Portuguese-Corpus", "csv": "texts.csv"},
-    {"name": "podcast", "root": "podcast", "csv": "texts.csv"},
-]
+from meta_io import load_corpora, corpus_dir, corpus_csv  # noqa: E402,F401  (sem torch)
 
-
-def load_corpora() -> list[dict]:
-    """Lista de corpora ativos. Cada item: {name, root, csv[, speakers]}."""
-    import json
-
-    if CORPORA_JSON.exists():
-        data = json.loads(CORPORA_JSON.read_text(encoding="utf-8"))
-        return [c for c in data if c.get("enabled", True)]
-    return list(_LEGACY_CORPORA)
-
-
-def corpus_dir(corp: dict) -> Path:
-    return DATASETS_ROOT / corp["root"]
-
-
-def corpus_csv(corp: dict) -> Path:
-    return corpus_dir(corp) / corp.get("csv", "texts.csv")
 SR = 24_000                    # sample rate alvo do modelo
 MAX_DUR_S = 10.2               # descarta clips acima disso (integridade texto-audio)
 MIN_DUR_S = 0.98
@@ -136,6 +116,11 @@ AUDIO_EOS_TOKEN_ID = 262145    # <|audio_eos|>
 BACKBONE_EOS_CLASS = None      # resolvido via config (vocab_size = 2051)
 IGNORE_IDX = -100              # ignorado por backbone e depth decoder
 DEPTH_IGNORE = -101            # frame usado SOMENTE pelo backbone (codebook 0)
+
+# Instrucao FIXA de producao (mesma string da UI e do gerar_em_blocos). O treino v2 usava um
+# pool de 9 frases: 8 nunca eram usadas na inferencia -> a instrucao virava ruido. O default
+# agora e esta string; o pool so e usado com --instruction-mode pool.
+DEFAULT_INSTRUCTION = "Fale com clareza e naturalidade."
 
 INSTRUCTION_POOL = [
     "Fale de forma clara e natural.",
@@ -233,7 +218,7 @@ class ConfigStub:
 
 @dataclass
 class ExampleRequest:
-    variant: str                 # 'tts_instruction' | 'ref_edit_tata'
+    variant: str                 # tts_plain | tts_instruction | ref_clone_tata | ref_edit_tata
     text: str                    # texto-alvo (transcricao)
     instruction: str
     ref_text: str = ""           # igual ao text no variante clone (transcricao do ref)
@@ -246,9 +231,12 @@ def build_segments(req: ExampleRequest, include_target: bool = True) -> list[dic
 
     Em inferencia os templates oficiais terminam no texto (o audio e GERADO).
     Em treino (estilo CSM) a sequencia precisa carregar o audio supervisionado:
-      tts_instruction -> [texto]               + [audio-alvo]
-      ref_edit_tata   -> [texto-ref, audio-ref,
+      tts_plain       -> [texto]               + [audio-alvo]
+      tts_instruction -> [instrucao+texto]     + [audio-alvo]
+      ref_clone_tata  -> [texto-ref, audio-ref,
                           texto]               + [audio-alvo]
+      ref_edit_tata   -> [texto-ref, audio-ref,
+                          instrucao+texto]     + [audio-alvo]
     include_target=False devolve o template puro (usado na checagem de paridade).
     """
     from breeze_infer import templates as T
@@ -260,10 +248,13 @@ def build_segments(req: ExampleRequest, include_target: bool = True) -> list[dic
     }
     if req.variant == "tts_instruction":
         segments = T._tts_instruction_segments(r)
-    elif req.variant == "ref_edit_tata":
+    elif req.variant == "tts_plain":
+        segments = T._tts_plain_segments(r)
+    elif req.variant in ("ref_edit_tata", "ref_clone_tata"):
         r["ref_audio_path"] = req.ref_audio_path
         r["ref_text"] = req.ref_text
-        segments = T._ref_edit_tata_segments(r)
+        segments = (T._ref_edit_tata_segments(r) if req.variant == "ref_edit_tata"
+                    else T._ref_clone_tata_segments(r))
     else:
         raise ValueError(f"variant desconhecido: {req.variant}")
 
@@ -343,16 +334,20 @@ def count_frames_per_block(example: dict) -> list[int]:
     return blocks
 
 
-TTS_INSTRUCTION_POLICIES = ["train"]
-REF_EDIT_TATA_POLICIES = ["backbone_only", "train"]
+TTS_POLICIES = ["train"]
+REF_POLICIES = ["backbone_only", "train"]      # bloco de referencia: so codebook 0 (backbone)
 
 POLICIES_BY_VARIANT = {
-    "tts_instruction": TTS_INSTRUCTION_POLICIES,
-    "ref_edit_tata": REF_EDIT_TATA_POLICIES,
-    # ref_edit_auto usa o MESMO template/policies de ref_edit (ref = outro clipe
-    # do MESMO locutor; internamente cai no template ref_edit_tata)
-    "ref_edit_auto": REF_EDIT_TATA_POLICIES,
+    "tts_plain": TTS_POLICIES,
+    "tts_instruction": TTS_POLICIES,
+    "ref_clone_tata": REF_POLICIES,
+    "ref_edit_tata": REF_POLICIES,
+    # legado: ref_edit_auto == ref_edit_tata (a diferenca era so a escolha da ref)
+    "ref_edit_auto": REF_POLICIES,
 }
+# nomes antigos (compat com scripts/exp. que importavam as listas)
+TTS_INSTRUCTION_POLICIES = TTS_POLICIES
+REF_EDIT_TATA_POLICIES = REF_POLICIES
 
 
 # ------------------------------------------------------------------ collate

@@ -5,7 +5,7 @@ da para navegar (samples/, checkpoints/, reference/) e ouvir pelo celular via
 Tailscale. Somente leitura.
 
 Uso:
-  python ptbr_lora/tools/serve_audio.py --root "C:\\IA\\Breeze-tts\\training\\runs" --host 0.0.0.0 --port 8081
+  python ptbr_lora/tools/serve_audio.py --root "<ARTIFACTS>\\training\\runs" --host 0.0.0.0 --port 8081
 """
 from __future__ import annotations
 

@@ -15,7 +15,12 @@ Recursos:
 Uso:
   python spk_similarity.py --dir <pasta> [--refs a.wav b.wav] [--gens c.wav d.wav]
   python spk_similarity.py --dir teste_seeds/T0.9_k50_p1_cfg1 \
-      --refs VozEdnilson.wav VozEdnilsonFalandoFrase.wav --wavlm --rms-match
+      --refs voz_autor.wav voz_autor_frase.wav --wavlm --rms-match
+
+VIES DO PROMPT: se a referencia usada como PROMPT da geracao tambem entra como referencia
+da metrica, o SECS sai inflado (o modelo copia canal/sala/microfone do prompt). Passe
+`--prompt-ref <wav>` para marcar quais refs foram prompt: o SECS "held-out" (so contra as
+outras refs do mesmo locutor) e o numero que vale; o SECS contra o prompt e reportado a parte.
 
 Sem `--refs`/`--gens`, descobre automaticamente em `--dir`:
   referências = `ref_*.wav`; gerações = `*.wav` (exceto as referências).
@@ -34,6 +39,7 @@ import torch
 _CORE = Path(__file__).resolve().parents[1] / "core"
 if str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))
+import asr_metrics as AM  # noqa: E402
 import paths  # noqa: E402
 
 
@@ -105,6 +111,9 @@ def main() -> None:
                     help="mede também com WavLM-SV (microsoft/wavlm-base-plus-sv). ATENCAO: no "
                          "material deste projeto essa variante se mostrou POUCO DISCRIMINATIVA "
                          "(da 0,93 para um locutor DIFERENTE) -- use --others para conferir")
+    ap.add_argument("--prompt-ref", nargs="*", default=None,
+                    help="refs que foram usadas como PROMPT na geracao (vies). O SECS que vale e "
+                         "o held-out: contra as demais refs do locutor")
     ap.add_argument("--others", nargs="*", default=None,
                     help="audios de OUTROS locutores: imprime o piso de dissimilaridade de cada "
                          "metrica (controle obrigatorio antes de confiar no numero)")
@@ -143,6 +152,11 @@ def main() -> None:
 
     print(f"\n# {len(gens)} geração(ões) vs {len(refs)} referência(s)  (dir={D})")
     rows = []
+    prompt_set = {Path(x).resolve() for x in (args.prompt_ref or [])}
+    held = [k for k, r in enumerate(refs) if r.resolve() not in prompt_set]
+    if prompt_set and not held:
+        print("[spk] AVISO: todas as refs sao prompt -> SECS VIESADO para cima (o modelo copia o "
+              "canal do prompt). Adicione >=1 gravacao do locutor NAO usada como prompt.")
     for g in gens:
         if not g.exists():
             print(f"{g.name:38s} (ausente)")
@@ -150,8 +164,11 @@ def main() -> None:
         eg = _embed(clf, g, args.device, rms_target)
         sims = [float(torch.dot(eg, E[r])) for r in refs]
         rows.append((g.name, sims))
-        det = "  ".join(f"{r.name}={s:.3f}" for r, s in zip(refs, sims))
-        print(f"{g.name:38s} SECS={np.mean(sims):.3f}  {det}")
+        det = "  ".join(f"{r.name}{'*' if r.resolve() in prompt_set else ''}={s:.3f}"
+                        for r, s in zip(refs, sims))
+        extra = (f" held-out={np.mean([sims[k] for k in held]):.3f}"
+                 if prompt_set and held else "")
+        print(f"{g.name:38s} SECS={np.mean(sims):.3f}{extra}  {det}")
 
     if args.wavlm and rows:
         print("\n# WavLM-SV (segunda opinião)")
@@ -173,7 +190,18 @@ def main() -> None:
         allv = [np.mean(s) for _, s in rows]
         med = float(np.median(allv))
         sd = float(np.std(allv))
-        print(f"\n[spk] mediana SECS = {med:.3f} | desvio = {sd:.3f} | n = {len(rows)}")
+        m, lo, hi = AM.bootstrap_ci(allv)
+        print(f"\n[spk] mediana SECS = {med:.3f} | media = {m:.3f} (IC95 {lo:.3f}-{hi:.3f}) "
+              f"| desvio = {sd:.3f} | n = {len(rows)}")
+        if prompt_set and held:
+            hv = [float(np.mean([sims[k] for k in held])) for _, sims in rows]
+            hm, hlo, hhi = AM.bootstrap_ci(hv)
+            print(f"[spk] SECS HELD-OUT (sem o prompt) = {hm:.3f} (IC95 {hlo:.3f}-{hhi:.3f}) "
+                  f"| mediana {float(np.median(hv)):.3f}  <- ESTE e o numero de identidade")
+            pv = [float(np.mean([sims[k] for k in range(len(refs)) if k not in held]))
+                  for _, sims in rows]
+            print(f"[spk] SECS vs PROMPT = {float(np.mean(pv)):.3f}  (viesado; nao comparar com "
+                  f"outros sistemas)")
         if args.exclude:
             pats = [re.compile(p) for p in args.exclude]
             keep = [(n, float(np.mean(s))) for n, s in rows
